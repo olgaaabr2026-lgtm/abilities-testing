@@ -405,6 +405,24 @@ var ENGINE = (function () {
     if (neg && Number(s) !== 0) out = '−' + out;
     return out;
   }
+  // Currency of generated amounts. The English version is for employers outside Russia: ordinary amounts are in US dollars and
+  // exchange-rate items convert dollars into euros (rate in € per $); the Russian version keeps roubles. The app sets the language
+  // before each item is generated (and replays an item in the language it was made in); generators read it only while generating,
+  // so both language texts of one item always name the same currency.
+  var GEN_LANG = 'ru';
+  function setGenLang(l) { GEN_LANG = l === 'en' ? 'en' : 'ru'; }
+  function usdMode() { return GEN_LANG === 'en'; }
+  function money(v, dec) { dec = dec || 0; return usdMode() ? T(fmt(v, dec, 'ru') + ' $', '$' + fmt(v, dec, 'en')) : T(fmt(v, dec, 'ru') + ' руб.', 'RUB ' + fmt(v, dec, 'en')); }
+  function moneyU(k) {
+    var R = { k: T('тыс. руб.', 'RUB k'), mn: T('млн руб.', 'RUB mn'), bn: T('млрд руб.', 'RUB bn'), t: T('руб./т', 'RUB/t') };
+    var U = { k: T('тыс. $', '$ k'), mn: T('млн $', '$ mn'), bn: T('млрд $', '$ bn'), t: T('$/т', '$/t') };
+    return (usdMode() ? U : R)[k];
+  }
+  function fxCur() { return fxSpec(usdMode()); }
+  function fxSpec(eur) {
+    return eur ? { eur: true, rate: T('Курс, € за $', 'Exchange rate, € per $'), name: T('евро', 'euros'), price: T('цена Urals в евро', 'euro price of Urals'), perBbl: T('€/барр.', '€/bbl'), big: T('млн €', '€ mn'), mid: T('млн €', '€ mn'), div: 1, dec: 1, bigDec: 0, fxDec: 3, f0: function () { return (840 + rnd(121)) / 1000; } }
+      : { eur: false, rate: T('Курс, руб./$', 'Exchange rate, RUB/$'), name: T('рублях', 'roubles'), price: T('рублёвая цена Urals', 'rouble price of Urals'), perBbl: T('руб./барр.', 'RUB/bbl'), big: T('млрд руб.', 'RUB bn'), mid: T('млн руб.', 'RUB mn'), div: 1000, dec: 0, bigDec: 1, fxDec: 1, f0: function () { return (780 + rnd(210)) / 10; } };
+  }
   function fmtS(n, d, lang) { var r = fmt(n, d, lang); return (n > 0 && Number(Math.abs(n).toFixed(d)) !== 0) ? '+' + r : r; }
 
   /* ---------- Figures ---------- */
@@ -1073,7 +1091,7 @@ var ENGINE = (function () {
     addedOpex: T('К капитальным затратам ошибочно добавлены операционные.', 'Operating costs were wrongly added to capital costs.'),
     noDiscount: T('Не вычтен дисконт Urals к Brent.', 'The Urals discount to Brent was not subtracted.'),
     addDiscount: T('Дисконт прибавлен вместо вычитания.', 'The discount was added instead of subtracted.'),
-    ignoredFx: T('Не учтён курс рубля: это изменение долларовой цены.', 'The exchange rate was ignored: this is the change in the dollar price.'),
+    ignoredFx: T('Не учтён валютный курс: это изменение долларовой цены.', 'The exchange rate was ignored: this is the change in the dollar price.'),
     noRecovery: T('Не учтён коэффициент извлечения.', 'The recovery rate was not applied.'),
     absAsPct: T('Взята абсолютная разница вместо процентного изменения.', 'The absolute difference was taken instead of the percentage change.'),
     allYears: T('Доля посчитана по сумме за все три года, а спрашивали про один год.', 'The share was computed over all three years, but the question is about one year.'),
@@ -1226,7 +1244,7 @@ var ENGINE = (function () {
   function prodVisual(ds, asChart) {
     return function (lang) {
       var cap = T('Добыча нефти по месторождениям, тыс. барр./сут (в среднем за год)', 'Oil production by field, thousand barrels per day (annual average)');
-      var note = T('Справочно: в году 365 дней; 1 тонна нефти ≈ 7,3 барреля.', 'For reference: a year has 365 days; 1 tonne of oil ≈ 7.3 barrels.');
+      var note = T('Для расчётов примите, что в каждом году 365 дней; 1 тонна нефти ≈ 7,3 барреля.', 'For calculations, assume every year has 365 days; 1 tonne of oil ≈ 7.3 barrels.');
       var nm = function (i) { return ds.names[lang === 'ru' ? 'ru' : 'en'][i]; };
       if (asChart) return '<p class="cap">' + esc(L(cap, lang)) + '</p>' + barChart(ds.idx.map(nm), ds.years.map(String), ds.rows, KBD, lang) + '<p class="note">' + esc(L(note, lang)) + '</p>';
       return tableHtml(cap, [T('Месторождение', 'Field')].concat(ds.years.map(String)), ds.rows.map(function (r, i) { return [nm(i)].concat(r.map(function (v) { return fmt(v, 0, lang); })); }), note, lang);
@@ -1446,31 +1464,31 @@ var ENGINE = (function () {
       case 'rub': case 'rubchg': case 'rev': {
         var P = prices(); base.visual = P.vis;
         var qn = function (i, lang) { return lang === 'ru' ? (i + 1) + '-м кв.' : 'Q' + (i + 1); };
-        var rp = function (i) { return (P.b[i] - P.d[i]) * P.fx[i]; };
+        var rp = function (i) { return (P.b[i] - P.d[i]) * P.fx[i]; }, C = P.C, fxd = C.fxDec;
         if (t === 'rub') {
           var qi = rnd(4), val5 = rp(qi);
           return numQ(Object.assign(base, {
-            type: 'fx', prompt: T('Какова средняя цена Urals в рублях за баррель в ' + qn(qi, 'ru') + ' 2025 г.?', 'What was the average Urals price in roubles per barrel in ' + qn(qi, 'en') + ' 2025?'),
-            correct: val5, dec: 0, unit: T('руб./барр.', 'RUB/bbl'),
+            type: 'fx', prompt: T('Какова средняя цена Urals в ' + C.name.ru + ' за баррель в ' + qn(qi, 'ru') + ' 2025 г.?', 'What was the average Urals price in ' + C.name.en + ' per barrel in ' + qn(qi, 'en') + ' 2025?'),
+            correct: val5, dec: C.dec, unit: C.perBbl,
             cands: [{ v: P.b[qi] * P.fx[qi], tag: 'noDiscount' }, { v: (P.b[qi] + P.d[qi]) * P.fx[qi], tag: 'addDiscount' }, { v: (P.b[qi] - P.d[qi]) * P.fx[(qi + 1) % 4], tag: 'otherFx' }],
-            solution: function (lang) { return '<p class="calc">(' + fmt(P.b[qi], 1, lang) + ' − ' + fmt(P.d[qi], 1, lang) + ') × ' + fmt(P.fx[qi], 1, lang) + ' = <b>' + fmt(val5, 0, lang) + '</b></p>'; }
+            solution: function (lang) { return '<p class="calc">(' + fmt(P.b[qi], 1, lang) + ' − ' + fmt(P.d[qi], 1, lang) + ') × ' + fmt(P.fx[qi], fxd, lang) + ' = <b>' + fmt(val5, C.dec, lang) + '</b></p>'; }
           }));
         }
         if (t === 'rubchg') {
           var i1 = rnd(3), i2 = i1 + 1 + rnd(3 - i1), ch = (rp(i2) - rp(i1)) / rp(i1) * 100, chu = ((P.b[i2] - P.d[i2]) - (P.b[i1] - P.d[i1])) / (P.b[i1] - P.d[i1]) * 100;
           return numQ(Object.assign(base, {
-            type: 'fx', prompt: T('На сколько процентов изменилась рублёвая цена Urals в ' + qn(i2, 'ru') + ' по сравнению с ' + qn(i1, 'ru') + '?', 'By what percentage did the rouble price of Urals change in ' + qn(i2, 'en') + ' compared with ' + qn(i1, 'en') + '?'),
+            type: 'fx', prompt: T('На сколько процентов изменилась ' + C.price.ru + ' в ' + qn(i2, 'ru') + ' по сравнению с ' + qn(i1, 'ru') + '?', 'By what percentage did the ' + C.price.en + ' change in ' + qn(i2, 'en') + ' compared with ' + qn(i1, 'en') + '?'),
             correct: ch, dec: 1, unit: '%', signed: true,
             cands: [{ v: chu, tag: 'ignoredFx' }, { v: (rp(i2) - rp(i1)) / rp(i2) * 100, tag: 'wrongBase' }, { v: (P.fx[i2] - P.fx[i1]) / P.fx[i1] * 100, tag: 'onlyFx' }],
             solution: function (lang) { return '<p class="calc">' + qn(i1, lang) + ': ' + fmt(rp(i1), 2, lang) + '; ' + qn(i2, lang) + ': ' + fmt(rp(i2), 2, lang) + ' → (' + fmt(rp(i2), 2, lang) + ' − ' + fmt(rp(i1), 2, lang) + ') ÷ ' + fmt(rp(i1), 2, lang) + ' × 100 = <b>' + fmtS(ch, 1, lang) + '%</b></p>'; }
           }));
         }
-        var qv = rnd(4), vol = (30 + rnd(90)) / 10, rev = vol * rp(qv) / 1000;
+        var qv = rnd(4), vol = (30 + rnd(90)) / 10, dv = C.div, rev = vol * rp(qv) / dv;
         return numQ(Object.assign(base, {
-          type: 'fx', prompt: T('Компания продала ' + fmt(vol, 1, 'ru') + ' млн барр. Urals в ' + qn(qv, 'ru') + ' по средней цене квартала. Какова выручка в млрд руб.?', 'The company sold ' + fmt(vol, 1, 'en') + ' mn bbl of Urals in ' + qn(qv, 'en') + ' at the quarterly average price. What was the revenue in RUB bn?'),
-          correct: rev, dec: 1, unit: T('млрд руб.', 'RUB bn'),
-          cands: [{ v: vol * P.b[qv] * P.fx[qv] / 1000, tag: 'noDiscount' }, { v: vol * rp((qv + 1) % 4) / 1000, tag: 'wrongPeriod' }, { v: vol * (P.b[qv] + P.d[qv]) * P.fx[qv] / 1000, tag: 'addDiscount' }],
-          solution: function (lang) { return '<p class="calc">' + fmt(vol, 1, lang) + ' × (' + fmt(P.b[qv], 1, lang) + ' − ' + fmt(P.d[qv], 1, lang) + ') × ' + fmt(P.fx[qv], 1, lang) + ' ÷ 1000 = <b>' + fmt(rev, 1, lang) + '</b></p><p class="muted">' + esc(L(T('млн барр. × руб./барр. = млн руб.; ÷ 1000 → млрд руб.', 'mn bbl × RUB/bbl = RUB mn; ÷ 1000 → RUB bn'), lang)) + '</p>'; }
+          type: 'fx', prompt: T('Компания продала ' + fmt(vol, 1, 'ru') + ' млн барр. Urals в ' + qn(qv, 'ru') + ' по средней цене квартала. Какова выручка в ' + C.big.ru + '?', 'The company sold ' + fmt(vol, 1, 'en') + ' mn bbl of Urals in ' + qn(qv, 'en') + ' at the quarterly average price. What was the revenue in ' + C.big.en + '?'),
+          correct: rev, dec: C.bigDec, unit: C.big,
+          cands: [{ v: vol * P.b[qv] * P.fx[qv] / dv, tag: 'noDiscount' }, { v: vol * rp((qv + 1) % 4) / dv, tag: 'wrongPeriod' }, { v: vol * (P.b[qv] + P.d[qv]) * P.fx[qv] / dv, tag: 'addDiscount' }],
+          solution: function (lang) { return '<p class="calc">' + fmt(vol, 1, lang) + ' × (' + fmt(P.b[qv], 1, lang) + ' − ' + fmt(P.d[qv], 1, lang) + ') × ' + fmt(P.fx[qv], fxd, lang) + (dv > 1 ? ' ÷ 1000' : '') + ' = <b>' + fmt(rev, C.bigDec, lang) + '</b></p><p class="muted">' + esc(L(dv > 1 ? T('млн барр. × руб./барр. = млн руб.; ÷ 1000 → млрд руб.', 'mn bbl × RUB/bbl = RUB mn; ÷ 1000 → RUB bn') : T('млн барр. × €/барр. = млн €', 'mn bbl × €/bbl = € mn'), lang)) + '</p>'; }
         }));
       }
       case 'metal': case 'maxmetal': {
@@ -1510,17 +1528,17 @@ var ENGINE = (function () {
     };
   }
   function prices() {
-    var b = [], d = [], fx = [];
-    var b0 = (600 + rnd(300)) / 10, f0 = (780 + rnd(210)) / 10, d0 = (80 + rnd(80)) / 10;
+    var b = [], d = [], fx = [], C = fxCur(), fp = Math.pow(10, C.fxDec);
+    var b0 = (600 + rnd(300)) / 10, f0 = C.f0(), d0 = (80 + rnd(80)) / 10;
     for (var i = 0; i < 4; i++) {
-      if (i) { b0 = Math.round((b0 + (rnd(81) - 40) / 10) * 10) / 10; f0 = Math.round(f0 * (1 + (rnd(101) - 50) / 1000) * 10) / 10; d0 = Math.min(18, Math.max(5, Math.round((d0 + (rnd(31) - 15) / 10) * 10) / 10)); }
+      if (i) { b0 = Math.round((b0 + (rnd(81) - 40) / 10) * 10) / 10; f0 = Math.round(f0 * (1 + (rnd(101) - 50) / 1000) * fp) / fp; d0 = Math.min(18, Math.max(5, Math.round((d0 + (rnd(31) - 15) / 10) * 10) / 10)); }
       b.push(b0); d.push(d0); fx.push(f0);
     }
     return {
-      b: b, d: d, fx: fx,
+      b: b, d: d, fx: fx, C: C,
       vis: function (lang) {
         return tableHtml(T('Средние значения по кварталам 2025 г.', 'Quarterly averages, 2025'), [T('Показатель', 'Indicator'), T('1 кв.', 'Q1'), T('2 кв.', 'Q2'), T('3 кв.', 'Q3'), T('4 кв.', 'Q4')],
-          [[L(T('Brent, $/барр.', 'Brent, $/bbl'), lang)].concat(b.map(function (x) { return fmt(x, 1, lang); })), [L(T('Дисконт Urals к Brent, $/барр.', 'Urals discount to Brent, $/bbl'), lang)].concat(d.map(function (x) { return fmt(x, 1, lang); })), [L(T('Курс, руб./$', 'Exchange rate, RUB/$'), lang)].concat(fx.map(function (x) { return fmt(x, 1, lang); }))],
+          [[L(T('Brent, $/барр.', 'Brent, $/bbl'), lang)].concat(b.map(function (x) { return fmt(x, 1, lang); })), [L(T('Дисконт Urals к Brent, $/барр.', 'Urals discount to Brent, $/bbl'), lang)].concat(d.map(function (x) { return fmt(x, 1, lang); })), [L(C.rate, lang)].concat(fx.map(function (x) { return fmt(x, C.fxDec, lang); }))],
           T('Цена Urals = Brent − дисконт.', 'Urals price = Brent − discount.'), lang);
       }
     };
@@ -1745,7 +1763,7 @@ var ENGINE = (function () {
     ['Corvane intends to reduce its leverage.', 'T', 'It aims to bring leverage below 2.0 times.'],
     ['Asset sales are the only way Corvane plans to bring its leverage below 2.0 times.', 'F', 'The passage says a cut in capital spending will make up the rest, so asset sales are not the only way.'],
     ['Corvane’s net debt was below 2.0 times EBITDA before the acquisition.', 'C', 'Pre-acquisition leverage is not given.']]);
-  P('en', 'National workforce quota', 'A new rule requires private companies with more than 50 employees to raise the share of national staff in skilled roles by 2 percentage points each year. Ras Al Barr Services, a private company, has 120 employees, and nationals currently hold 9% of its skilled roles. Companies that miss the target pay a monthly contribution for each unfilled position. Ras Al Barr plans to meet the requirement through a graduate hiring programme with a local university.', [
+  P('en', 'National workforce quota', 'A new rule in one Gulf country requires private companies with more than 50 employees to raise the share of national staff in skilled roles by 2 percentage points each year. Ras Al Barr Services, a private company, has 120 employees, and nationals currently hold 9% of its skilled roles. Companies that miss the target pay a monthly contribution for each unfilled position. Ras Al Barr plans to meet the requirement through a graduate hiring programme with a local university.', [
     ['The rule applies to Ras Al Barr Services.', 'T', 'It is a private company with 120 employees, more than 50.'],
     ['After one year Ras Al Barr must reach an 11% national share in skilled roles.', 'T', '9% + 2 percentage points = 11%.'],
     ['Missing the target results in a one-off fine.', 'F', 'Companies pay a monthly contribution for each unfilled position.'],
@@ -1969,7 +1987,7 @@ var ENGINE = (function () {
     genDeductive: genDeductive, genOrder: genOrder, genSyllogism: genSyllogism,
     genNumerical: genNumerical, genVerbal: genVerbal, verbalPlan: verbalPlan, verbalItems: verbalItems,
     V: V, frameSvg: frameSvg, cellSvg: cellSvg, PERMS5: PERMS5, posOf: posOf, clueOk: clueOk, MODELS: MODELS, evalS: evalS,
-    fmtS: fmtS, cap: cap, keyStandsOut: keyStandsOut, centreInfo: centreInfo, centreOK: centreOK, keyRole: keyRole, numQ: numQ, nameQ: nameQ, tableHtml: tableHtml, barChart: barChart, shapeEl: shapeEl, qBox: qBox,
+    fmtS: fmtS, setGenLang: setGenLang, usdMode: usdMode, money: money, moneyU: moneyU, fxCur: fxCur, fxSpec: fxSpec, cap: cap, keyStandsOut: keyStandsOut, centreInfo: centreInfo, centreOK: centreOK, keyRole: keyRole, numQ: numQ, nameQ: nameQ, tableHtml: tableHtml, barChart: barChart, shapeEl: shapeEl, qBox: qBox,
     clueText: clueText, PEOPLE: PEOPLE, FIELDS: FIELDS, SUPPLIERS: SUPPLIERS, WDAY: WDAY, NUM_TAGS: NUM_TAGS, passageHtml: passageHtml, TFC: TFC, TFCI: TFCI, trapNote: trapNote, ANA_Q: ANA_Q, ANA_TIP: ANA_TIP,
     setNumMode: function (m) { NUM_MODE = m || 'choice'; }, getNumMode: function () { return NUM_MODE; }
   };
@@ -2586,7 +2604,7 @@ var ENGINE = (function () {
     var Y0 = 2019 + rnd(3), yrs = [0, 1, 2, 3, 4, 5].map(function (k) { return String(Y0 + k); });
     var a = yrs.map(function () { return (60 + rnd(160)) / 10; }), b = yrs.map(function () { return (10 + rnd(50)) / 10; });
     var nY = level === 1 ? 2 : level === 2 ? 3 : 4 + rnd(2), s0 = rnd(6 - nY + 1), cty = Math.random() < (level === 1 ? 0.5 : 0.25) ? 1 : 0, ser = cty ? b : a;
-    var P = (3 + rnd(15)) * 1000, rates = ser.slice(s0, s0 + nY), f = rates.reduce(function (x, r) { return x * (1 + r / 100); }, 1);
+    var usdI = E.usdMode(), P = (3 + rnd(15)) * (usdI ? 100 : 1000), cuI = usdI ? T('$', '$') : T('руб.', 'RUB'), rates = ser.slice(s0, s0 + nY), f = rates.reduce(function (x, r) { return x * (1 + r / 100); }, 1);
     var rev = level === 3 && Math.random() < 0.4, cname = [T('Страна A', 'Country A'), T('Страна B', 'Country B')];
     var vis = function (lang) { return lineChart(yrs, [{ n: cname[0], v: a }, { n: cname[1], v: b }], T('% за год', '% a year'), T('Годовая инфляция, % (декабрь к декабрю)', 'Annual inflation, % (December on December)'), lang, 2); };
     var B = base(level, 'chart'); B.typeName = T('Инфляция: сложный процент', 'Inflation: compounding'); B.visual = vis;
@@ -2598,12 +2616,12 @@ var ENGINE = (function () {
     if (!rev) {
       var V = P * f, cands = [{ v: P * (1 + sum / 100), note: noteT('Годовые проценты сложены, а инфляция накапливается: нужно перемножать коэффициенты.', 'The yearly rates were added, but inflation compounds: multiply the factors.') }, { v: P * oth, note: noteT('Взята инфляция другой страны.', 'The other country’s inflation was used.') }, { v: P * shortF, note: noteT('Учтены не все годы: пропущен ' + y2 + ' г.', 'Not all years counted: ' + y2 + ' was left out.') }];
       if (longF) cands.push({ v: P * longF, note: noteT('Взят лишний год.', 'An extra year was included.') });
-      return numQ(Object.assign(B, { prompt: T('Набор товаров в стране ' + cn.ru.replace('Страна ', '') + ' стоил ' + fmt(P, 0, 'ru') + ' руб. в начале ' + y1 + ' г. Сколько он стоил в конце ' + y2 + ' г., если его цена каждый год росла вместе с инфляцией этой страны?', 'A basket of goods in ' + cn.en + ' cost RUB ' + fmt(P, 0, 'en') + ' at the start of ' + y1 + '. What did it cost at the end of ' + y2 + ' if its price rose each year in line with that country’s inflation?'), correct: V, dec: 0, unit: T('руб.', 'RUB'), cands: cands,
+      return numQ(Object.assign(B, { prompt: T('Набор товаров в стране ' + cn.ru.replace('Страна ', '') + ' стоил ' + E.money(P).ru + ' в начале ' + y1 + ' г. Сколько он стоил в конце ' + y2 + ' г., если его цена каждый год росла вместе с инфляцией этой страны?', 'A basket of goods in ' + cn.en + ' cost ' + E.money(P).en + ' at the start of ' + y1 + '. What did it cost at the end of ' + y2 + ' if its price rose each year in line with that country’s inflation?'), correct: V, dec: 0, unit: cuI, cands: cands,
         solution: function (lang) { return calcP(fmt(P, 0, lang) + ' × ' + chain(lang) + ' = <b>' + fmt(V, 0, lang) + '</b>') + '<p class="muted">' + esc(L(T('Годы с ' + y1 + ' по ' + y2 + ' включительно — это ' + nY + ' коэффициента роста; инфляция каждого года начисляется на уже выросшую цену.', 'The years ' + y1 + ' to ' + y2 + ' inclusive give ' + nY + ' growth factors; each year’s inflation applies to the already higher price.'), lang)) + '</p>'; },
         tip: T('«С начала года X до конца года Y» — это все годы от X до Y включительно. Коэффициенты (1 + инфляция) перемножаются, а не складываются; при 3–4 годах разница уже заметна в вариантах ответа.', '“From the start of year X to the end of year Y” covers every year from X to Y inclusive. Multiply the (1 + inflation) factors, do not add the rates; over 3–4 years the difference shows up in the options.') }));
     }
     var Vend = P, Vs = P / f;
-    return numQ(Object.assign(B, { prompt: T('В конце ' + y2 + ' г. набор товаров в стране ' + cn.ru.replace('Страна ', '') + ' стоил ' + fmt(P, 0, 'ru') + ' руб. Сколько он стоил в начале ' + y1 + ' г., если его цена каждый год росла вместе с инфляцией этой страны?', 'At the end of ' + y2 + ' a basket of goods in ' + cn.en + ' cost RUB ' + fmt(P, 0, 'en') + '. What did it cost at the start of ' + y1 + ' if its price rose each year in line with that country’s inflation?'), correct: Vs, dec: 0, unit: T('руб.', 'RUB'),
+    return numQ(Object.assign(B, { prompt: T('В конце ' + y2 + ' г. набор товаров в стране ' + cn.ru.replace('Страна ', '') + ' стоил ' + E.money(P).ru + '. Сколько он стоил в начале ' + y1 + ' г., если его цена каждый год росла вместе с инфляцией этой страны?', 'At the end of ' + y2 + ' a basket of goods in ' + cn.en + ' cost ' + E.money(P).en + '. What did it cost at the start of ' + y1 + ' if its price rose each year in line with that country’s inflation?'), correct: Vs, dec: 0, unit: cuI,
       cands: [{ v: P * rates.reduce(function (x, r) { return x * (1 - r / 100); }, 1), note: noteT('Проценты вычтены из конечной цены, а нужно делить на коэффициенты роста.', 'The percentages were subtracted from the final price; divide by the growth factors instead.') }, { v: P / (1 + sum / 100), note: noteT('Годовые проценты сложены, а они накапливаются.', 'The yearly rates were added, but they compound.') }, { v: P / oth, note: noteT('Взята инфляция другой страны.', 'The other country’s inflation was used.') }, { v: P / shortF, note: noteT('Учтены не все годы.', 'Not all years were counted.') }],
       solution: function (lang) { return calcP(fmt(Vend, 0, lang) + ' ÷ (' + chain(lang) + ') = <b>' + fmt(Vs, 0, lang) + '</b>'); },
       tip: T('Чтобы вернуться назад, делите на произведение коэффициентов (1 + инфляция). Вычитать проценты из конечной цены нельзя: каждый процент считался от другой базы.', 'To go back in time, divide by the product of the (1 + inflation) factors. Subtracting the rates from the final price is wrong: each rate applied to a different base.') }));
@@ -2672,22 +2690,26 @@ var ENGINE = (function () {
 
   /* N5. Reverse percentages: tariff indexation */
   function genReverse(level) {
-    var a = pick([6, 7, 8, 9, 10, 11, 12]), b = pick([5, 7, 9, 10, 12, 14]), t25 = (5000 + rnd(30000)) / 10;
+    var a = pick([6, 7, 8, 9, 10, 11, 12]), b = pick([5, 7, 9, 10, 12, 14]), usdT = E.usdMode(), td = usdT ? 2 : 1, t25 = usdT ? (500 + rnd(3000)) / 100 : (5000 + rnd(30000)) / 10, tU = E.moneyU('t'); // dollars a tonne are two orders smaller than roubles
     var t23 = t25 / ((1 + a / 100) * (1 + b / 100)), t24 = t25 / (1 + b / 100);
-    var vis = function (lang) { return tableHtml(T('Тариф на транспортировку нефти по трубопроводу', 'Pipeline oil transport tariff'), [T('Показатель', 'Item'), '2024', '2025'], [[L(T('Индексация тарифа к прошлому году, %', 'Indexation versus previous year, %'), lang), '+' + a, '+' + b], [L(T('Тариф, руб./т', 'Tariff, RUB/t'), lang), '—', fmt(t25, 1, lang)]], T('Индексация применяется к тарифу прошлого года.', 'Indexation is applied to the previous year’s tariff.'), lang); };
+    var vis = function (lang) { return tableHtml(T('Тариф на транспортировку нефти по трубопроводу', 'Pipeline oil transport tariff'), [T('Показатель', 'Item'), '2024', '2025'], [[L(T('Индексация тарифа к прошлому году, %', 'Indexation versus previous year, %'), lang), '+' + a, '+' + b], [L(T('Тариф, ' + tU.ru, 'Tariff, ' + tU.en), lang), '—', fmt(t25, td, lang)]], T('Индексация применяется к тарифу прошлого года.', 'Indexation is applied to the previous year’s tariff.'), lang); };
     var B = base(level, 'calc'); B.typeName = T('Обратный процент', 'Reverse percentage'); B.visual = vis;
     var two = level === 3 || (level === 2 && Math.random() < 0.6), v = two ? t23 : t24;
-    return numQ(Object.assign(B, { prompt: two ? T('Каким был тариф в 2023 г.?', 'What was the tariff in 2023?') : T('Каким был тариф в 2024 г.?', 'What was the tariff in 2024?'), correct: v, dec: 1, unit: T('руб./т', 'RUB/t'),
+    return numQ(Object.assign(B, { prompt: two ? T('Каким был тариф в 2023 г.?', 'What was the tariff in 2023?') : T('Каким был тариф в 2024 г.?', 'What was the tariff in 2024?'), correct: v, dec: td, unit: tU,
       cands: two ? [{ v: t25 * (1 - a / 100) * (1 - b / 100), note: noteT('Проценты вычтены из нового тарифа, а нужно делить на (1 + индексация).', 'The percentages were subtracted from the new tariff; you must divide by (1 + indexation).') }, { v: t25 / (1 + (a + b) / 100), note: noteT('Индексации сложены, а они накладываются друг на друга.', 'The indexations were added, but they compound.') }, { v: t24, note: noteT('Это тариф 2024 г., а нужно вернуться ещё на год.', 'This is the 2024 tariff; go back one more year.') }]
         : [{ v: t25 * (1 - b / 100), note: noteT('Процент вычтен из нового тарифа, а нужно разделить на (1 + индексация).', 'The percentage was subtracted from the new tariff; divide by (1 + indexation) instead.') }, { v: t25 / (1 + a / 100), note: noteT('Взята индексация не того года.', 'The wrong year’s indexation was used.') }],
-      solution: function (lang) { return calcP(two ? fmt(t25, 1, lang) + ' ÷ ' + fmt(1 + b / 100, 2, lang) + ' ÷ ' + fmt(1 + a / 100, 2, lang) + ' = <b>' + fmt(v, 1, lang) + '</b>' : fmt(t25, 1, lang) + ' ÷ ' + fmt(1 + b / 100, 2, lang) + ' = <b>' + fmt(v, 1, lang) + '</b>'); },
+      solution: function (lang) { return calcP(two ? fmt(t25, td, lang) + ' ÷ ' + fmt(1 + b / 100, 2, lang) + ' ÷ ' + fmt(1 + a / 100, 2, lang) + ' = <b>' + fmt(v, td, lang) + '</b>' : fmt(t25, td, lang) + ' ÷ ' + fmt(1 + b / 100, 2, lang) + ' = <b>' + fmt(v, td, lang) + '</b>'); },
       tip: T('Если известно значение после роста на p%, исходное = значение ÷ (1 + p/100). Вычитать p% из нового значения нельзя: процент считался от другой базы.', 'If you know the value after a p% rise, the original is value ÷ (1 + p/100). Subtracting p% from the new value is wrong: the percentage was taken on a different base.') }));
   }
 
   /* N5b. Reverse percentage after a cut: the original value = new value ÷ (1 − p/100) */
   var CUT_ITEMS = [[T('Удельные операционные затраты', 'Unit operating cost'), T('$/барр.', '$/bbl'), 120, 260, 1], [T('Стоимость бурения скважины', 'Cost of drilling a well'), T('млн руб.', 'RUB mn'), 900, 2400, 1], [T('Цена закупки труб', 'Pipe purchase price'), T('тыс. руб./т', 'RUB k/t'), 600, 1500, 1]];
   function genReverseCut(level) {
-    var it = pick(CUT_ITEMS), p = pick([8, 12, 15, 18, 20, 25]), now = (it[2] + rnd(it[3] - it[2])) / (it[4] ? 10 : 1), was = now / (1 - p / 100);
+    var it = pick(CUT_ITEMS), p = pick([8, 12, 15, 18, 20, 25]), now = (it[2] + rnd(it[3] - it[2])) / (it[4] ? 10 : 1);
+    // English: dollar amounts — a well at $9–24 mn, pipes at $600–1,500 a tonne
+    if (E.usdMode() && it === CUT_ITEMS[1]) { it = [it[0], T('млн $', '$ mn')]; now = Math.round(now) / 10; } // one decimal, as shown
+    else if (E.usdMode() && it === CUT_ITEMS[2]) { it = [it[0], T('$/т', '$/t')]; now = now * 10; }
+    var was = now / (1 - p / 100);
     var vis = function (lang) { return tableHtml(T('Программа снижения затрат, 2025 г.', 'Cost-cutting programme, 2025'), [L(it[0], lang) + ', ' + L(it[1], lang), ''], [[L(T('Снижение за год, %', 'Cut over the year, %'), lang), '−' + p], [L(T('Значение после снижения', 'Value after the cut'), lang), fmt(now, 1, lang)]], T('Снижение считается от значения до начала программы.', 'The cut is measured against the value before the programme.'), lang); };
     var B = base(level, 'calc'); B.typeName = T('Обратный процент', 'Reverse percentage'); B.visual = vis;
     return numQ(Object.assign(B, { prompt: T('Каким был показатель «' + it[0].ru + '» до снижения?', 'What was the “' + it[0].en + '” before the cut?'), correct: was, dec: 1, unit: it[1],
@@ -2791,13 +2813,15 @@ var ENGINE = (function () {
   function genCombo(level, opt) {
     opt = opt || {};
     var Q = ['1 кв.', '2 кв.', '3 кв.', '4 кв.'], QE = ['Q1', 'Q2', 'Q3', 'Q4'];
-    var D = opt.D || { prod: [0, 1, 2, 3].map(function () { return (40 + rnd(80)) / 10; }), price: [0, 1, 2, 3].map(function () { return (600 + rnd(250)) / 10; }), fx: [0, 1, 2, 3].map(function () { return (780 + rnd(200)) / 10; }) };
+    var D = opt.D || { prod: [0, 1, 2, 3].map(function () { return (40 + rnd(80)) / 10; }), price: [0, 1, 2, 3].map(function () { return (600 + rnd(250)) / 10; }), fx: null };
+    if (!D.fx) { D.eur = E.fxCur().eur; D.fx = [0, 1, 2, 3].map(function () { return D.eur ? (840 + rnd(121)) / 1000 : (780 + rnd(200)) / 10; }); } // English: dollars into euros
+    var Cx = E.fxSpec(!!D.eur);
     var inSet = !!opt.D; opt.D = D;
     var prod = D.prod, price = D.price, fx = D.fx;
     var cq = opt.q != null ? opt.q : (level === 1 || (level === 2 && Math.random() < 0.5)) ? 0 : 1;
     // units trap (as in Russian employer tests): the chart is in hundreds of thousands of barrels, the answer in $ mn
     var hk = cq === 0 && level >= 2 && !inSet && Math.random() < 0.5; // not in Korn Ferry sets: all three questions share one chart
-    var vis = function (lang) { return E.barChart(lang === 'ru' ? Q : QE, [L(T('Добыча', 'Output'), lang)], prod.map(function (v) { return [hk ? Math.round(v * 10) : v]; }), hk ? T('сотни тыс. барр.', 'hundreds of thousands of bbl') : T('млн барр.', 'mn bbl'), lang).replace(/>(\d+\.\d)</g, function (m0, n0) { return '>' + fmt(+n0, 1, lang) + '<'; }) + tableHtml(T('Цена реализации и курс', 'Realised price and exchange rate'), [T('Показатель', 'Item')].concat(lang === 'ru' ? Q : QE), [[L(T('Цена, $/барр.', 'Price, $/bbl'), lang)].concat(price.map(function (v) { return fmt(v, 1, lang); })), [L(T('Курс, руб./$', 'RUB/$'), lang)].concat(fx.map(function (v) { return fmt(v, 1, lang); }))], null, lang); };
+    var vis = function (lang) { return E.barChart(lang === 'ru' ? Q : QE, [L(T('Добыча', 'Output'), lang)], prod.map(function (v) { return [hk ? Math.round(v * 10) : v]; }), hk ? T('сотни тыс. барр.', 'hundreds of thousands of bbl') : T('млн барр.', 'mn bbl'), lang).replace(/>(\d+\.\d)</g, function (m0, n0) { return '>' + fmt(+n0, 1, lang) + '<'; }) + tableHtml(T('Цена реализации и курс', 'Realised price and exchange rate'), [T('Показатель', 'Item')].concat(lang === 'ru' ? Q : QE), [[L(T('Цена, $/барр.', 'Price, $/bbl'), lang)].concat(price.map(function (v) { return fmt(v, 1, lang); })), [L(Cx.eur ? T('€ за $', '€ per $') : T('Курс, руб./$', 'RUB/$'), lang)].concat(fx.map(function (v) { return fmt(v, Cx.fxDec, lang); }))], null, lang); };
     var B = base(level, 'chart'); B.visual = vis; B.typeName = T('График и таблица', 'Chart and table');
     if (cq === 2) {
       var r4 = prod.map(function (x, z) { return x * price[z]; }), a2 = rnd(3), b2 = a2 + 1 + rnd(3 - a2), chg = (r4[b2] - r4[a2]) / r4[a2] * 100;
@@ -2812,10 +2836,10 @@ var ENGINE = (function () {
         cands: (hk ? [{ v: v * 10, note: noteT('Не учтены единицы графика: столбцы даны в сотнях тысяч баррелей, а не в миллионах.', 'The chart units were missed: the bars are in hundreds of thousands of barrels, not millions.') }, { v: v / 10, note: noteT('Единицы графика пересчитаны в другую сторону: 10 сотен тысяч — это 1 млн.', 'The chart units were converted the wrong way: ten lots of 100,000 make 1 million.') }] : []).concat([{ v: prod[i] * price[(i + 1) % 4], note: noteT('Взята цена другого квартала.', 'The price of another quarter was used.') }, { v: [0, 1, 2, 3].reduce(function (sm, z) { return sm + prod[z] * price[z]; }, 0) / 4, note: noteT('Это средняя квартальная выручка за год, а спрашивали про конкретный квартал.', 'This is the average quarterly revenue for the year, not the quarter asked about.') }, { v: prod[(i + 1) % 4] * price[i], note: noteT('Взята добыча другого квартала.', 'Another quarter’s output was used.') }]),
         solution: function (lang) { return (hk ? '<p class="muted">' + esc(L(T(Math.round(prod[i] * 10) + ' сотен тыс. барр. = ' + fmt(prod[i], 1, 'ru') + ' млн барр.', Math.round(prod[i] * 10) + ' × 100,000 bbl = ' + fmt(prod[i], 1, 'en') + ' mn bbl'), lang)) + '</p>' : '') + calcP(fmt(prod[i], 1, lang) + ' × ' + fmt(price[i], 1, lang) + ' = <b>' + fmt(v, 0, lang) + ' ' + money(lang) + '</b>'); } }));
     }
-    var h = (prod[0] * price[0] * fx[0] + prod[1] * price[1] * fx[1]) / 1000;
-    return numQ(Object.assign(B, { prompt: T('Какой была рублёвая выручка от продажи нефти за первое полугодие?', 'What was oil sales revenue in roubles for the first half of the year?'), correct: h, dec: 1, unit: T('млрд руб.', 'RUB bn'),
-      cands: [{ v: (prod[0] + prod[1]) * (price[0] + price[1]) / 2 * (fx[0] + fx[1]) / 2 / 1000, note: noteT('Взяты средние цена и курс за полугодие, а считать нужно по каждому кварталу отдельно.', 'Average price and rate for the half-year were used; each quarter must be calculated separately.') }, { v: (prod[0] * price[0] + prod[1] * price[1]), note: noteT('Выручка не переведена в рубли.', 'Revenue was not converted to roubles.') }, { v: (prod[0] * price[0] * fx[0]) / 1000, note: noteT('Учтён только первый квартал.', 'Only Q1 was counted.') }],
-      solution: function (lang) { return calcP('(' + fmt(prod[0], 1, lang) + ' × ' + fmt(price[0], 1, lang) + ' × ' + fmt(fx[0], 1, lang) + ' + ' + fmt(prod[1], 1, lang) + ' × ' + fmt(price[1], 1, lang) + ' × ' + fmt(fx[1], 1, lang) + ') ÷ 1000 = <b>' + fmt(h, 1, lang) + '</b>') + '<p class="muted">' + esc(L(T('млн барр. × $/барр. × руб./$ = млн руб.; ÷ 1000 → млрд руб.', 'mn bbl × $/bbl × RUB/$ = RUB mn; ÷ 1000 → RUB bn'), lang)) + '</p>'; },
+    var dv = Cx.div, h = (prod[0] * price[0] * fx[0] + prod[1] * price[1] * fx[1]) / dv;
+    return numQ(Object.assign(B, { prompt: T('Какой была выручка от продажи нефти в ' + Cx.name.ru + ' за первое полугодие?', 'What was oil sales revenue in ' + Cx.name.en + ' for the first half of the year?'), correct: h, dec: Cx.bigDec, unit: Cx.big,
+      cands: [{ v: (prod[0] + prod[1]) * (price[0] + price[1]) / 2 * (fx[0] + fx[1]) / 2 / dv, note: noteT('Взяты средние цена и курс за полугодие, а считать нужно по каждому кварталу отдельно.', 'Average price and rate for the half-year were used; each quarter must be calculated separately.') }, { v: (prod[0] * price[0] + prod[1] * price[1]), note: noteT('Выручка не переведена в ' + (Cx.eur ? 'евро' : 'рубли') + '.', 'Revenue was not converted to ' + Cx.name.en + '.') }, { v: (prod[0] * price[0] * fx[0]) / dv, note: noteT('Учтён только первый квартал.', 'Only Q1 was counted.') }],
+      solution: function (lang) { return calcP('(' + fmt(prod[0], 1, lang) + ' × ' + fmt(price[0], 1, lang) + ' × ' + fmt(fx[0], Cx.fxDec, lang) + ' + ' + fmt(prod[1], 1, lang) + ' × ' + fmt(price[1], 1, lang) + ' × ' + fmt(fx[1], Cx.fxDec, lang) + ')' + (dv > 1 ? ' ÷ 1000' : '') + ' = <b>' + fmt(h, Cx.bigDec, lang) + '</b>') + '<p class="muted">' + esc(L(dv > 1 ? T('млн барр. × $/барр. × руб./$ = млн руб.; ÷ 1000 → млрд руб.', 'mn bbl × $/bbl × RUB/$ = RUB mn; ÷ 1000 → RUB bn') : T('млн барр. × $/барр. × €/$ = млн €', 'mn bbl × $/bbl × €/$ = € mn'), lang)) + '</p>'; },
       tip: T('Когда данные разнесены по графику и таблице, сначала сопоставьте периоды и единицы, потом считайте по каждому периоду отдельно и только затем складывайте.', 'When data is split between a chart and a table, first match periods and units, then calculate each period separately and only then add up.') }));
   }
 
@@ -2957,26 +2981,26 @@ var ENGINE = (function () {
     return genBizCo(level);
   }
   function genBizBank(level) {
-    var P = 100 * (5 + rnd(96)), r = pick([8, 9, 10, 11, 12, 13, 14, 15, 16, 18]), B;
+    var usdB = E.usdMode(), P = 100 * (5 + rnd(96)), r = pick(usdB ? [4, 4.5, 5, 5.5, 6, 6.5, 7, 8] : [8, 9, 10, 11, 12, 13, 14, 15, 16, 18]), B, kU = E.moneyU('k'), mU = E.moneyU('mn'); // dollar deposit rates are lower than rouble ones
     if (level === 1) {
       var mths = pick([3, 6, 9, 18]), I = P * 1000 * r / 100 * mths / 12;
-      B = bizB(level, function (lang) { return tableHtml(T('Условия вклада', 'Deposit terms'), [T('Параметр', 'Term'), T('Значение', 'Value')], [[L(T('Сумма вклада, тыс. руб.', 'Deposit, RUB k'), lang), fmt(P, 0, lang)], [L(T('Ставка, % годовых', 'Rate, % a year'), lang), String(r)], [L(T('Начисление процентов', 'Interest'), lang), L(T('простые проценты, выплата в конце срока', 'simple interest, paid at maturity'), lang)]], null, lang); }, T('Проценты и ставки', 'Interest and rates'));
-      return numQ(Object.assign(B, { prompt: T('Какой доход принесёт вклад за ' + mths + ' мес.?', 'How much interest will the deposit earn over ' + mths + ' months?'), correct: I / 1000, dec: 1, unit: T('тыс. руб.', 'RUB k'),
+      B = bizB(level, function (lang) { return tableHtml(T('Условия вклада', 'Deposit terms'), [T('Параметр', 'Term'), T('Значение', 'Value')], [[L(T('Сумма вклада, ' + kU.ru, 'Deposit, ' + kU.en), lang), fmt(P, 0, lang)], [L(T('Ставка, % годовых', 'Rate, % a year'), lang), fmt(r, r % 1 ? 1 : 0, lang)], [L(T('Начисление процентов', 'Interest'), lang), L(T('простые проценты, выплата в конце срока', 'simple interest, paid at maturity'), lang)]], null, lang); }, T('Проценты и ставки', 'Interest and rates'));
+      return numQ(Object.assign(B, { prompt: T('Какой доход принесёт вклад за ' + mths + ' мес.?', 'How much interest will the deposit earn over ' + mths + ' months?'), correct: I / 1000, dec: 1, unit: kU,
         cands: [{ v: P * r / 100, note: noteT('Взята годовая ставка целиком, без пересчёта на срок.', 'The full annual rate was applied, not pro rata for the term.') }, { v: P * (Math.pow(1 + r / 1200, mths) - 1), note: noteT('Посчитаны сложные проценты с ежемесячной капитализацией, а по условиям проценты простые.', 'Monthly compounding was applied, but the terms specify simple interest.') }, { v: P * r / 100 * mths / 10, note: noteT('Срок разделён на 10 месяцев вместо 12.', 'The term was divided by 10 months instead of 12.') }],
-        solution: function (lang) { return calcP(fmt(P, 0, lang) + ' × ' + r + '% × ' + mths + ' ÷ 12 = <b>' + fmt(I / 1000, 1, lang) + '</b>'); } }));
+        solution: function (lang) { return calcP(fmt(P, 0, lang) + ' × ' + fmt(r, r % 1 ? 1 : 0, lang) + '% × ' + mths + ' ÷ 12 = <b>' + fmt(I / 1000, 1, lang) + '</b>'); } }));
     }
     if (level === 2) {
       var eff = (Math.pow(1 + r / 1200, 12) - 1) * 100;
-      B = bizB(level, function (lang) { return tableHtml(T('Условия вклада', 'Deposit terms'), [T('Параметр', 'Term'), T('Значение', 'Value')], [[L(T('Ставка, % годовых', 'Rate, % a year'), lang), String(r)], [L(T('Капитализация', 'Compounding'), lang), L(T('ежемесячно', 'monthly'), lang)], [L(T('Срок', 'Term'), lang), L(T('1 год', '1 year'), lang)]], null, lang); }, T('Проценты и ставки', 'Interest and rates'));
+      B = bizB(level, function (lang) { return tableHtml(T('Условия вклада', 'Deposit terms'), [T('Параметр', 'Term'), T('Значение', 'Value')], [[L(T('Ставка, % годовых', 'Rate, % a year'), lang), fmt(r, r % 1 ? 1 : 0, lang)], [L(T('Капитализация', 'Compounding'), lang), L(T('ежемесячно', 'monthly'), lang)], [L(T('Срок', 'Term'), lang), L(T('1 год', '1 year'), lang)]], null, lang); }, T('Проценты и ставки', 'Interest and rates'));
       return numQ(Object.assign(B, { prompt: T('Какова эффективная годовая доходность вклада с учётом ежемесячной капитализации?', 'What is the effective annual yield of the deposit, taking monthly compounding into account?'), correct: eff, dec: 2, unit: '%',
         cands: [{ v: r, note: noteT('Это номинальная ставка; капитализация увеличивает доходность.', 'That is the nominal rate; compounding raises the yield.') }, { v: (Math.pow(1 + r / 400, 4) - 1) * 100, note: noteT('Посчитана ежеквартальная капитализация.', 'Quarterly compounding was used.') }, { v: (Math.pow(1 + r / 100, 1 / 12) - 1) * 1200, note: noteT('Выполнен обратный пересчёт: из годовой ставки в месячную.', 'The conversion went the wrong way, from annual to monthly.') }],
-        solution: function (lang) { return calcP('(1 + ' + r + '% ÷ 12)<sup>12</sup> − 1 = <b>' + fmt(eff, 2, lang) + '%</b>'); } }));
+        solution: function (lang) { return calcP('(1 + ' + fmt(r, r % 1 ? 1 : 0, lang) + '% ÷ 12)<sup>12</sup> − 1 = <b>' + fmt(eff, 2, lang) + '%</b>'); } }));
     }
     var c0 = 100 * (10 + rnd(31)), cf = [0, 0, 0].map(function () { return 10 * (25 + rnd(30)); }), rr = pick([8, 10, 12, 14, 15]);
     var df = function (t) { return Math.pow(1 + rr / 100, t); }, npv = -c0 + cf[0] / df(1) + cf[1] / df(2) + cf[2] / df(3);
     if (Math.abs(npv) < 15) return genBizBank(level);
-    B = bizB(level, function (lang) { return tableHtml(T('Денежные потоки проекта, млн руб.', 'Project cash flows, RUB mn'), [T('Год', 'Year'), '0', '1', '2', '3'], [[L(T('Поток', 'Cash flow'), lang), fmt(-c0, 0, lang), fmt(cf[0], 0, lang), fmt(cf[1], 0, lang), fmt(cf[2], 0, lang)]], T('Ставка дисконтирования ' + rr + '% годовых; потоки приходят в конце года.', 'Discount rate ' + rr + '% a year; cash flows arrive at year end.'), lang); }, T('Проценты и ставки', 'Interest and rates'));
-    return numQ(Object.assign(B, { prompt: T('Какова чистая приведённая стоимость (NPV) проекта?', 'What is the project’s net present value (NPV)?'), correct: npv, dec: 1, unit: T('млн руб.', 'RUB mn'), signed: true,
+    B = bizB(level, function (lang) { return tableHtml(T('Денежные потоки проекта, ' + mU.ru, 'Project cash flows, ' + mU.en), [T('Год', 'Year'), '0', '1', '2', '3'], [[L(T('Поток', 'Cash flow'), lang), fmt(-c0, 0, lang), fmt(cf[0], 0, lang), fmt(cf[1], 0, lang), fmt(cf[2], 0, lang)]], T('Ставка дисконтирования ' + rr + '% годовых; потоки приходят в конце года.', 'Discount rate ' + rr + '% a year; cash flows arrive at year end.'), lang); }, T('Проценты и ставки', 'Interest and rates'));
+    return numQ(Object.assign(B, { prompt: T('Какова чистая приведённая стоимость (NPV) проекта?', 'What is the project’s net present value (NPV)?'), correct: npv, dec: 1, unit: mU, signed: true,
       cands: [{ v: -c0 + cf[0] + cf[1] + cf[2], note: noteT('Потоки сложены без дисконтирования.', 'The cash flows were added without discounting.') }, { v: -c0 + cf[0] + cf[1] / df(1) + cf[2] / df(2), note: noteT('Дисконтирование сдвинуто на год: первый поток не дисконтирован.', 'Discounting is shifted by a year: the first flow was not discounted.') }, { v: -c0 + (cf[0] + cf[1] + cf[2]) / df(3), note: noteT('Все потоки дисконтированы как поток третьего года.', 'All flows were discounted as if they arrived in Year 3.') }],
       solution: function (lang) { return calcP('−' + fmt(c0, 0, lang) + ' + ' + cf.map(function (v, t) { return fmt(v, 0, lang) + ' ÷ ' + fmt(df(t + 1), 4, lang); }).join(' + ') + ' = <b>' + fmtS(npv, 1, lang) + '</b>'); } }));
   }
@@ -3017,16 +3041,16 @@ var ENGINE = (function () {
         how: { '6': T(nf(Eb, 'ru') + ' ÷ ' + m + '% = ' + nf(R2, 'ru'), nf(Eb, 'en') + ' ÷ ' + m + '% = ' + nf(R2, 'en')), '4': T(nf(D, 'ru') + ' ÷ 0,' + (g < 10 ? '0' : '') + g + ' = ' + nf(R, 'ru') + ' — выручка 2024 г.; + ' + nf(D, 'ru') + ' = ' + nf(R2, 'ru'), nf(D, 'en') + ' ÷ 0.' + (g < 10 ? '0' : '') + g + ' = ' + nf(R, 'en') + ' is 2024 revenue; + ' + nf(D, 'en') + ' = ' + nf(R2, 'en')), '0,1': T(nf(R, 'ru') + ' × ' + nf(1 + g / 100, 'ru', 2) + ' = ' + nf(R2, 'ru'), nf(R, 'en') + ' × ' + nf(1 + g / 100, 'en', 2) + ' = ' + nf(R2, 'en')), '2,3': T(nf(Eb, 'ru') + ' + ' + nf(K, 'ru') + ' = ' + nf(R2, 'ru'), nf(Eb, 'en') + ' + ' + nf(K, 'en') + ' = ' + nf(R2, 'en')), '0,5': T(nf(R, 'ru') + ' + ' + nf(D, 'ru') + ' = ' + nf(R2, 'ru'), nf(R, 'en') + ' + ' + nf(D, 'en') + ' = ' + nf(R2, 'en')), '1,5': T('прирост ' + nf(D, 'ru') + ' — это ' + g + '% выручки 2024 г.: ' + nf(D, 'ru') + ' ÷ 0,' + (g < 10 ? '0' : '') + g + ' + ' + nf(D, 'ru') + ' = ' + nf(R2, 'ru'), 'the rise of ' + nf(D, 'en') + ' is ' + g + '% of 2024 revenue: ' + nf(D, 'en') + ' ÷ 0.' + (g < 10 ? '0' : '') + g + ' + ' + nf(D, 'en') + ' = ' + nf(R2, 'en')) } };
     },
     function store() {
-      var nF = (40 + rnd(60)) * 10, a = (8 + rnd(12)) * 100, y = pick([5, 10, 20, 25]), N = (40 + rnd(60)) * 10, aM = a * (100 + y) / 100, S = N * aM, x = Math.round((S / (nF * a) - 1) * 1000) / 10;
+      var usdS = E.usdMode(), mo = function (v, l) { return usdS ? (l === 'ru' ? nf(v, l) + ' $' : '$' + nf(v, l)) : (l === 'ru' ? nf(v, l) + ' руб.' : 'RUB ' + nf(v, l)); }, nF = (40 + rnd(60)) * 10, a = usdS ? (4 + rnd(6)) * 20 : (8 + rnd(12)) * 100, y = pick([5, 10, 20, 25]), N = (40 + rnd(60)) * 10, aM = a * (100 + y) / 100, S = N * aM, x = Math.round((S / (nF * a) - 1) * 1000) / 10;
       if (Math.abs(x) < 1) return null;
       return { q: T('Каким был средний чек магазина в марте (выручка ÷ число покупок)?', 'What was the shop’s average purchase in March (revenue ÷ number of purchases)?'),
         st: [{ t: TT(function (l) { return l === 'ru' ? 'В марте в магазине было ' + nf(N, l) + ' покупок.' : 'There were ' + nf(N, l) + ' purchases in March.'; }) },
-          { t: TT(function (l) { return l === 'ru' ? 'Выручка магазина в марте — ' + nf(S, l) + ' руб.' : 'The shop’s March revenue was RUB ' + nf(S, l) + '.'; }) },
+          { t: TT(function (l) { return l === 'ru' ? 'Выручка магазина в марте — ' + mo(S, l) : 'The shop’s March revenue was ' + mo(S, l) + '.'; }) },
           { t: TT(function (l) { return l === 'ru' ? 'Выручка в марте изменилась на ' + (x > 0 ? '+' : '') + nf(x, l, 1) + '% по сравнению с февралём.' : 'March revenue changed by ' + (x > 0 ? '+' : '') + nf(x, l, 1) + '% versus February.'; }) },
-          { t: TT(function (l) { return l === 'ru' ? 'В феврале средний чек был ' + nf(a, l) + ' руб., а покупок было ' + nf(nF, l) + '.' : 'In February the average purchase was RUB ' + nf(a, l) + ' across ' + nf(nF, l) + ' purchases.'; }) },
+          { t: TT(function (l) { return l === 'ru' ? 'В феврале средний чек был ' + mo(a, l) + ', а покупок было ' + nf(nF, l) + '.' : 'In February the average purchase was ' + mo(a, l) + ' across ' + nf(nF, l) + ' purchases.'; }) },
           { t: TT(function (l) { return l === 'ru' ? 'Средний чек в марте на ' + y + '% выше февральского.' : 'The March average purchase was ' + y + '% higher than in February.'; }), h: 1 }],
         one: [], pair: [[0, 1], [3, 4]],
-        how: { '0,1': T(nf(S, 'ru') + ' ÷ ' + nf(N, 'ru') + ' = ' + nf(aM, 'ru') + ' руб.', nf(S, 'en') + ' ÷ ' + nf(N, 'en') + ' = RUB ' + nf(aM, 'en')), '3,4': T(nf(a, 'ru') + ' × ' + nf(1 + y / 100, 'ru', 2) + ' = ' + nf(aM, 'ru') + ' руб. (число покупок февраля здесь лишнее)', nf(a, 'en') + ' × ' + nf(1 + y / 100, 'en', 2) + ' = RUB ' + nf(aM, 'en') + ' (February’s purchase count is not needed)') } };
+        how: { '0,1': T(nf(S, 'ru') + ' ÷ ' + nf(N, 'ru') + ' = ' + mo(aM, 'ru'), nf(S, 'en') + ' ÷ ' + nf(N, 'en') + ' = ' + mo(aM, 'en')), '3,4': T(nf(a, 'ru') + ' × ' + nf(1 + y / 100, 'ru', 2) + ' = ' + mo(aM, 'ru') + ' (число покупок февраля здесь лишнее)', nf(a, 'en') + ' × ' + nf(1 + y / 100, 'en', 2) + ' = ' + mo(aM, 'en') + ' (February’s purchase count is not needed)') } };
     },
     function truck() {
       var v = pick([50, 60, 70, 75, 80]), t = pick([3, 4, 5, 6]), d = v * t, c = pick([25, 30, 32, 35]), F = d * c / 100, dep = 6 + rnd(4), st = pick([30, 45, 60]), arr = dep + t + st / 60;
@@ -3066,10 +3090,10 @@ var ENGINE = (function () {
         how: { '5': T('разница ' + nf(D, 'ru') + ' — это ' + (100 - 2 * c) + '% посетителей: ' + nf(D, 'ru') + ' ÷ ' + (100 - 2 * c) + '% × ' + c + '% = ' + nf(ch, 'ru'), 'the gap of ' + nf(D, 'en') + ' is ' + (100 - 2 * c) + '% of visitors: ' + nf(D, 'en') + ' ÷ ' + (100 - 2 * c) + '% × ' + c + '% = ' + nf(ch, 'en')), '2': T(nf(A, 'ru') + ' − ' + nf(D, 'ru') + ' = ' + nf(ch, 'ru'), nf(A, 'en') + ' − ' + nf(D, 'en') + ' = ' + nf(ch, 'en')), '0,1': T(nf(V, 'ru') + ' × ' + c + '% = ' + nf(ch, 'ru'), nf(V, 'en') + ' × ' + c + '% = ' + nf(ch, 'en')), '0,3': T(nf(V, 'ru') + ' − ' + nf(A, 'ru') + ' = ' + nf(ch, 'ru'), nf(V, 'en') + ' − ' + nf(A, 'en') + ' = ' + nf(ch, 'en')), '3,4': T(nf(A, 'ru') + ' ÷ ' + kk + ' = ' + nf(ch, 'ru'), nf(A, 'en') + ' ÷ ' + kk + ' = ' + nf(ch, 'en')), '0,4': T('взрослые и дети делят ' + nf(V, 'ru') + ' в пропорции ' + kk + ' : 1 → ' + nf(V, 'ru') + ' ÷ ' + (kk + 1) + ' = ' + nf(ch, 'ru'), 'adults and children split ' + nf(V, 'en') + ' as ' + kk + ' : 1 → ' + nf(V, 'en') + ' ÷ ' + (kk + 1) + ' = ' + nf(ch, 'en')), '1,3': T('взрослые — это ' + (100 - c) + '% посетителей: ' + nf(A, 'ru') + ' ÷ ' + (100 - c) + '% × ' + c + '% = ' + nf(ch, 'ru'), 'adults are ' + (100 - c) + '% of visitors: ' + nf(A, 'en') + ' ÷ ' + (100 - c) + '% × ' + c + '% = ' + nf(ch, 'en')) } };
     },
     function share() {
-      var M = (20 + rnd(80)) * 10, s0 = pick([8, 10, 12, 15, 20]), h = pick([5, 10, 20]), g = pick([5, 10, 15, 25, 30].filter(function (z) { return z !== h; })), M0 = M / (1 + h / 100), x0 = M0 * s0 / 100, x = x0 * (1 + g / 100), s = x / M * 100;
+      var usdM = E.usdMode(), mbU = E.moneyU('bn'), M = (20 + rnd(80)) * 10, s0 = pick([8, 10, 12, 15, 20]), h = pick([5, 10, 20]), g = pick([5, 10, 15, 25, 30].filter(function (z) { return z !== h; })), M0 = M / (1 + h / 100), x0 = M0 * s0 / 100, x = x0 * (1 + g / 100), s = x / M * 100;
       return { q: T('Какую долю рынка занимала компания в 2025 г.?', 'What market share did the company have in 2025?'),
-        st: [{ t: TT(function (l) { return l === 'ru' ? 'Объём рынка в 2025 г. — ' + nf(M, l) + ' млрд руб.' : 'The market was worth RUB ' + nf(M, l) + ' bn in 2025.'; }) },
-          { t: TT(function (l) { return l === 'ru' ? 'Продажи компании в 2025 г. — ' + nf(x, l, 1) + ' млрд руб.' : 'The company’s 2025 sales were RUB ' + nf(x, l, 1) + ' bn.'; }) },
+        st: [{ t: TT(function (l) { return l === 'ru' ? 'Объём рынка в 2025 г. — ' + nf(M, l) + ' ' + mbU.ru : 'The market was worth ' + (usdM ? '$' + nf(M, l) + ' bn' : 'RUB ' + nf(M, l) + ' bn') + ' in 2025.'; }) },
+          { t: TT(function (l) { return l === 'ru' ? 'Продажи компании в 2025 г. — ' + nf(x, l, 1) + ' ' + mbU.ru : 'The company’s 2025 sales were ' + (usdM ? '$' + nf(x, l, 1) + ' bn' : 'RUB ' + nf(x, l, 1) + ' bn') + '.'; }) },
           { t: TT(function (l) { return l === 'ru' ? 'В 2024 г. доля компании была ' + s0 + '%; в 2025 г. её продажи выросли на ' + g + '%, а рынок — на ' + h + '%.' : 'In 2024 the company’s share was ' + s0 + '%; in 2025 its sales grew by ' + g + '% and the market by ' + h + '%.'; }), h: 1 },
           { t: TT(function (l) { return l === 'ru' ? 'В 2024 г. доля компании составляла ' + s0 + '%.' : 'The company’s share in 2024 was ' + s0 + '%.'; }) },
           { t: TT(function (l) { return l === 'ru' ? 'В 2025 г. рынок вырос на ' + h + '%.' : 'The market grew by ' + h + '% in 2025.'; }) }],
@@ -4535,22 +4559,22 @@ var ENGINE = (function () {
   }
   // D. Fill table cells: rouble revenue by quarter
   function genCellsFx(level) {
-    var n = 3, usd = [], fx = [];
-    for (var k = 0; k < n; k++) { usd.push((200 + rnd(400)) * 1); fx.push((780 + rnd(200)) / 10); }
-    var rub = usd.map(function (u, k) { return u * fx[k] / 1000; }), tot = rub.reduce(function (a, b) { return a + b; }, 0);
+    var n = 3, usd = [], fx = [], Cf = E.fxCur(), dv = Cf.div, fd = Cf.fxDec; // English: dollars into euros, € mn
+    for (var k = 0; k < n; k++) { usd.push((200 + rnd(400)) * 1); fx.push(Cf.eur ? (840 + rnd(121)) / 1000 : (780 + rnd(200)) / 10); }
+    var rub = usd.map(function (u, k) { return u * fx[k] / dv; }), tot = rub.reduce(function (a, b) { return a + b; }, 0);
     var ans = rub.map(function (v) { return { value: v, dec: 1 }; }); if (level === 3) ans.push({ value: tot, dec: 1 });
     ans.forEach(function (a, i) { a.tol = (i === n ? 0.15 : 0.05) + 1e-9; }); // the total may be summed from the rounded quarters
     var QL = ['1 кв.', '2 кв.', '3 кв.'], QE = ['Q1', 'Q2', 'Q3'];
     return {
       mod: 'num', type: 'cells', level: level, mode: 'cells', options: [], notes: [], correct: null,
       typeName: T('Заполнение таблицы', 'Table completion'),
-      prompt: T('Заполните строку «Выручка, млрд руб.»' + (level === 3 ? ' и итог за 9 месяцев' : '') + '. Округлите до 0,1.', 'Fill in the “Revenue, RUB bn” row' + (level === 3 ? ' and the nine-month total' : '') + '. Round to 0.1.'),
+      prompt: T('Заполните строку «Выручка, ' + Cf.big.ru + '»' + (level === 3 ? ' и итог за 9 месяцев' : '') + '. Округлите до 0,1.', 'Fill in the “Revenue, ' + Cf.big.en + '” row' + (level === 3 ? ' and the nine-month total' : '') + '. Round to 0.1.'),
       visual: function () { return ''; },
       cells: { cap: T('Выручка от экспорта', 'Export revenue'), head: [T('Показатель', 'Item')].concat(QL.map(function (q, k) { return T(q, QE[k]); })).concat(level === 3 ? [T('Итого', 'Total')] : []),
-        rows: [[T('Выручка, млн $', 'Revenue, $ mn')].concat(usd.map(String)).concat(level === 3 ? ['—'] : []), [T('Курс, руб./$', 'RUB per $')].concat(fx.map(function (v) { return T(fmt(v, 1, 'ru'), fmt(v, 1, 'en')); })).concat(level === 3 ? ['—'] : []), [T('Выручка, млрд руб.', 'Revenue, RUB bn')].concat(ans.map(function (_, k) { return { k: k }; }))] },
+        rows: [[T('Выручка, млн $', 'Revenue, $ mn')].concat(usd.map(String)).concat(level === 3 ? ['—'] : []), [Cf.eur ? T('Курс, € за $', '€ per $') : T('Курс, руб./$', 'RUB per $')].concat(fx.map(function (v) { return T(fmt(v, fd, 'ru'), fmt(v, fd, 'en')); })).concat(level === 3 ? ['—'] : []), [T('Выручка, ' + Cf.big.ru, 'Revenue, ' + Cf.big.en)].concat(ans.map(function (_, k) { return { k: k }; }))] },
       cellAns: ans,
-      solution: function (lang) { return calcP(usd.map(function (u, k) { return (lang === 'ru' ? QL : QE)[k] + ': ' + u + ' × ' + fmt(fx[k], 1, lang) + ' ÷ 1000 = <b>' + fmt(rub[k], 1, lang) + '</b>'; }).join('<br>') + (level === 3 ? '<br>' + esc(L(T('Итого: ', 'Total: '), lang)) + '<b>' + fmt(tot, 1, lang) + '</b>' : '')) + '<p class="muted">' + esc(L(T('млн $ × руб./$ = млн руб.; ÷ 1000 → млрд руб.', '$ mn × RUB/$ = RUB mn; ÷ 1000 → RUB bn'), lang)) + '</p>'; },
-      tip: T('Следите за единицами: миллионы долларов, умноженные на курс, дают миллионы рублей. Итог за период — сумма по кварталам, а не средний курс × сумма долларов.', 'Watch the units: dollars in millions times the rate gives roubles in millions. The period total is the sum of the quarters, not the average rate × total dollars.')
+      solution: function (lang) { return calcP(usd.map(function (u, k) { return (lang === 'ru' ? QL : QE)[k] + ': ' + u + ' × ' + fmt(fx[k], fd, lang) + (dv > 1 ? ' ÷ 1000' : '') + ' = <b>' + fmt(rub[k], 1, lang) + '</b>'; }).join('<br>') + (level === 3 ? '<br>' + esc(L(T('Итого: ', 'Total: '), lang)) + '<b>' + fmt(tot, 1, lang) + '</b>' : '')) + '<p class="muted">' + esc(L(dv > 1 ? T('млн $ × руб./$ = млн руб.; ÷ 1000 → млрд руб.', '$ mn × RUB/$ = RUB mn; ÷ 1000 → RUB bn') : T('млн $ × €/$ = млн €', '$ mn × €/$ = € mn'), lang)) + '</p>'; },
+      tip: Cf.eur ? T('Следите за единицами: миллионы долларов, умноженные на курс € за $, дают миллионы евро. Итог за период — сумма по кварталам, а не средний курс × сумма долларов.', 'Watch the units: dollars in millions times the € per $ rate gives euros in millions. The period total is the sum of the quarters, not the average rate × total dollars.') : T('Следите за единицами: миллионы долларов, умноженные на курс, дают миллионы рублей. Итог за период — сумма по кварталам, а не средний курс × сумма долларов.', 'Watch the units: dollars in millions times the rate gives roubles in millions. The period total is the sum of the quarters, not the average rate × total dollars.')
     };
   }
   var SHL_INT = { forecast: genBarsForecast, split: genBarsSplit, ebitda: genCellsEbitda, fx: genCellsFx };
@@ -5076,7 +5100,7 @@ var ENGINE = (function () {
     ['Участник уровня «Золото» на тарифе «Стандарт» может бесплатно сдать два места багажа до 23 кг каждое.', 'T', 'Одно место входит в тариф, второе бесплатно для уровня «Золото».'],
     ['Новые сборы должны покрыть рост расходов на топливо.', 'C', 'Цель сборов в тексте не названа.']]);
   PG('en', 'Automated insurance claims', 'Harbor Mutual now settles simple car-damage claims through an automated system. Claims under $3,000 that include photographs and involve no reported injuries are assessed within 48 hours; all other claims go to a human assessor, which takes nine working days on average. A check of 500 automated decisions found errors in 2% of them, compared with 3% for decisions by human assessors over the same period. Customers can ask for any automated decision to be reviewed by a person.', [
-    ['A $2,500 claim with photographs in which a passenger was injured is assessed by the automated system.', 'F', 'Claims with reported injuries go to a human assessor.'],
+    ['A $2,500 claim with photographs that reports an injury to a passenger is assessed by the automated system.', 'F', 'Claims with reported injuries go to a human assessor.'],
     ['Errors were found in about 10 of the 500 automated decisions checked.', 'T', '2% of 500 is 10.'],
     ['For complex claims, the automated system would be more accurate than human assessors.', 'C', 'The system handles only simple claims, so the comparison says nothing about complex ones.'],
     ['Customers cannot challenge an automated decision.', 'F', 'They can ask for it to be reviewed by a person.']], [
@@ -5310,13 +5334,13 @@ var ENGINE = (function () {
     ['Visitors were assigned to the two versions by chance.', 'T', 'Stated: they were assigned at random.'],
     ['Asking for fewer details made it easier for visitors to finish signing up.', 'PT', 'With random assignment, the higher sign-up rate for the shorter form most likely comes from the form itself.'],
     ['Users who signed up through version B are more likely to become paying customers.', 'ID', 'Payment has not been measured.'],
-    ['Version A produced more registered users than version B.', 'PF', 'Version B converted a higher share; unless far more visitors saw version A, which random assignment makes unlikely, B produced more users.'],
+    ['Version A produced more registered users than version B.', 'PF', 'The text does not give the size of each group. For version A to produce more users, about 27% more visitors would have to see it than version B (6.1 ÷ 4.8 ≈ 1.27); nothing in the text points to such an uneven split, so the statement is probably false, but not certainly.'],
     ['Version B users completed their profiles in the first week more often than version A users.', 'F', 'They were less likely to complete their profile.']]);
   W('ru', 'inf', 'Компания-разработчик сравнила две версии страницы регистрации на 20 000 посетителей, распределённых случайным образом. Версия B, где нужно было указать меньше данных, превратила в зарегистрированных пользователей 6,1% посетителей, версия A — 4,8%. Зарегистрировавшиеся через версию B реже заполняли профиль в первую неделю. Становятся ли пользователи платящими клиентами, компания пока не измеряла.', [
     ['Посетители распределялись между версиями случайно.', 'T', 'Прямо сказано: распределение случайное.'],
     ['Меньший объём данных облегчил посетителям завершение регистрации.', 'PT', 'При случайном распределении более высокая доля регистраций у короткой формы, скорее всего, объясняется самой формой.'],
     ['Пользователи версии B чаще становятся платящими клиентами.', 'ID', 'Оплаты не измерялись.'],
-    ['Версия A дала больше зарегистрированных пользователей, чем версия B.', 'PF', 'У версии B выше доля регистраций; если только версию A не увидело гораздо больше людей, что при случайном распределении маловероятно, B дала больше пользователей.'],
+    ['Версия A дала больше зарегистрированных пользователей, чем версия B.', 'PF', 'Размеры групп в тексте не указаны. Чтобы версия A дала больше пользователей, её должно было увидеть примерно на 27% больше посетителей, чем версию B (6,1 ÷ 4,8 ≈ 1,27); на такое неравное разделение в тексте ничего не указывает, поэтому утверждение скорее неверно, но не наверняка.'],
     ['Пользователи версии B чаще заполняли профиль в первую неделю, чем пользователи версии A.', 'F', 'Они заполняли профиль реже.']]);
   // ---- Assumptions ----
   W('en', 'asm', '“We should move this year’s sales conference online: that will save us about $200,000 in travel and venue costs.”', [
@@ -6654,7 +6678,7 @@ var ENGINE = (function () {
     lvHint: [T('Два правила в рядах, простые расчёты — для разминки и знакомства с форматом.', 'Two rules per series and simple calculations — a warm-up to learn the format.'), T('Уровень руководящих позиций: три правила одновременно, многошаговые расчёты, CAGR.', 'Management level: three rules at once, multi-step calculations, CAGR.'), T('Как верхняя ступень адаптивного теста: растущие шаги, восемь вариантов в матрицах, сложные выводы.', 'Like the top of an adaptive test: growing steps, eight options in matrices, harder conclusions.')],
     startTrain: T('Начать тренировку', 'Start practice'), allTypes: T('Все типы', 'All types'),
     yourAcc: T('Ваша точность', 'Your accuracy'), answers: T('ответов', 'answers'), noData: T('Ещё нет ответов', 'No answers yet'),
-    examNote: T('Число вопросов и лимиты времени взяты из открытых источников (фактлисты SHL, сайты ЭКОПСИ, обзоры подготовительных сервисов) и могут отличаться у конкретного работодателя. Интерактивные задания SHL представлены рассадкой и ранжированием по сетке, выбором на расписании и в календаре, вводом числа, перетаскиванием столбцов графика и заполнением таблиц. В Korn Ferry к каждой таблице и тексту идёт по три вопроса с лимитами 90/75/75 и 75/60/60 секунд. Как и в реальных адаптивных тестах, вернуться к прошлому вопросу нельзя. В режиме экзамена разбор показывается в конце. Метки: «подтверждено» — число вопросов, время и таймер совпадают с источником, названным под тестом; «упрощено» — что-то отличается от реального теста или известно лишь приблизительно. Если страница закроется или перезагрузится во время экзамена, он продолжится с того же вопроса, а время всё это время идёт, как в настоящем онлайн-тесте.', 'Question counts and time limits come from public sources (SHL fact sheets, Ecopsy sites, prep-provider guides) and may differ by employer. SHL interactive tasks appear here as grid allocation and ranking, picking slots on schedules and calendars, typed numbers, dragging chart bars and filling in tables. In Korn Ferry each table or passage carries three questions, timed 90/75/75 and 75/60/60 seconds. As in real adaptive tests, you cannot go back to a previous question. In exam mode the breakdown is shown at the end. Labels: “confirmed” — item count, time and timer match the source named under the test; “simplified” — something differs from the real test or is known only approximately. If the page closes or reloads during an exam, it resumes at the same item, and the clock keeps running meanwhile, as in a real online test.'),
+    examNote: T('Число вопросов и лимиты времени взяты из открытых источников (фактлисты SHL, сайты ЭКОПСИ, обзоры подготовительных сервисов) и могут отличаться у конкретного работодателя. Интерактивные задания SHL представлены рассадкой и ранжированием по сетке, выбором на расписании и в календаре, вводом числа, перетаскиванием столбцов графика и заполнением таблиц. В Korn Ferry к каждой таблице и тексту идёт по три вопроса с лимитами 90/75/75 и 75/60/60 секунд. Как и в реальных адаптивных тестах, вернуться к прошлому вопросу нельзя. В режиме экзамена разбор показывается в конце. Метки: «подтверждено» — число вопросов, время и таймер совпадают с источником, названным под тестом; «упрощено» — что-то отличается от реального теста или известно лишь приблизительно. Если страница закроется или перезагрузится во время экзамена, он продолжится с того же вопроса, с уже выбранным, но не отправленным ответом, а время всё это время идёт, как в настоящем онлайн-тесте. Ответ, изменённый после окончания времени, не засчитывается: засчитывается то, что было выбрано вовремя.', 'Question counts and time limits come from public sources (SHL fact sheets, Ecopsy sites, prep-provider guides) and may differ by employer. SHL interactive tasks appear here as grid allocation and ranking, picking slots on schedules and calendars, typed numbers, dragging chart bars and filling in tables. In Korn Ferry each table or passage carries three questions, timed 90/75/75 and 75/60/60 seconds. As in real adaptive tests, you cannot go back to a previous question. In exam mode the breakdown is shown at the end. Labels: “confirmed” — item count, time and timer match the source named under the test; “simplified” — something differs from the real test or is known only approximately. If the page closes or reloads during an exam, it resumes at the same item with any answer you had picked but not sent, and the clock keeps running meanwhile, as in a real online test. An answer changed after the time is up does not count: what was picked in time is submitted.'),
     start: T('Начать', 'Start'),
     check: T('Проверить', 'Check'), next: T('Следующий вопрос', 'Next question'), finish: T('К результатам', 'See results'), answer: T('Ответить', 'Submit'),
     quit: T('Завершить', 'End'), quitQ: T('Завершить сессию?', 'End the session?'), yes: T('Да, завершить', 'Yes, end'), no: T('Продолжить', 'Keep going'),
@@ -6727,7 +6751,7 @@ var ENGINE = (function () {
     'shl-ded': { ok: T('До 12 вопросов за 18 минут, адаптивный — фактлист SHL.', 'Up to 12 items in 18 minutes, adaptive — SHL fact sheet.'), simp: T('Перетаскивание людей и встреч заменено таблицей выбора; виды заданий — по описаниям JobTestPrep.', 'Dragging people and meetings is replaced by a selection grid; task types follow JobTestPrep descriptions.') },
     'shl-verb': { ok: T('До 30 утверждений за 19 минут — фактлист SHL.', 'Up to 30 statements in 19 minutes — SHL fact sheet.'), simp: T('Длину текстов и число утверждений к тексту SHL не публикует.', 'SHL does not publish passage length or statements per passage.') },
     'shl-va': { ok: T('До 18 вопросов за 15 минут, адаптивный — фактлист SHL.', 'Up to 18 items in 15 minutes, adaptive — SHL fact sheet.'), simp: T('Формат «текст — один вопрос — 4 варианта» взят у сайтов подготовки: SHL его не публикует.', 'The “passage — one question — 4 options” format comes from prep sites; SHL does not publish it.') },
-    'shl-g': { ok: T('До 24 вопросов за 36 минут, по 8 каждого вида — фактлист SHL.', 'Up to 24 items in 36 minutes, 8 of each kind — SHL fact sheet.'), simp: SHL_INT },
+    'shl-g': { ok: T('До 24 вопросов за 36 минут, адаптивный — фактлист SHL.', 'Up to 24 items in 36 minutes, adaptive — SHL fact sheet.'), simp: T('Разбивка поровну, по 8 числовых, индуктивных и дедуктивных, — настройка тренажёра: в фактлисте её нет. ' + SHL_INT.ru, 'The even split, 8 numerical, 8 inductive and 8 deductive, is the trainer’s setting: the fact sheet gives none. ' + SHL_INT.en) },
     'kf-log': { ok: T('12 вопросов по 75 секунд, адаптивный — по данным подготовительных сервисов (JobTestPrep и др.); Korn Ferry фактлист не публикует.', '12 items, 75 seconds each, adaptive — per prep providers (JobTestPrep and others); Korn Ferry publishes no fact sheet.') },
     'kf-num': { ok: T('12 вопросов по 4 таблицам, 90 и 75 секунд — по данным подготовительных сервисов.', '12 items on 4 tables, 90 and 75 seconds — per prep providers.') },
     'kf-verb': { ok: T('15 вопросов по 5 текстам, 75 и 60 секунд, выбор 1–2 утверждений — по данным подготовительных сервисов.', '15 items on 5 passages, 75 and 60 seconds, choose 1–2 statements — per prep providers.') },
@@ -6735,7 +6759,7 @@ var ENGINE = (function () {
     'eco-num': { simp: ECO_SIMP }, 'eco-verb': { simp: ECO_SIMP }, 'eco-log': { simp: ECO_SIMP }, 'eco-m-num': { simp: ECO_SIMP }, 'eco-m-verb': { simp: ECO_SIMP }, 'eco-m-log': { simp: ECO_SIMP },
     'eco-pif': { simp: T('Состав блоков и лимиты — по неофициальным источникам и рассказам кандидатов; ЭКОПСИ их не публикует.', 'Blocks and limits come from unofficial sources and candidate reports; Ecopsy does not publish them.') },
     'wg3': { ok: T('40 вопросов за 30 минут, 5 разделов — TalentLens.', '40 items in 30 minutes, 5 sections — TalentLens.'), simpRu: T('Русская версия — перевод для подготовки: официальной русской версии нет.', 'The Russian version is a practice translation: there is no official Russian edition.') },
-    'game-cog': { simp: T('Набор игр и время — по данным Criteria и подготовительных сервисов; механика игр упрощена.', 'Games and timing per Criteria and prep providers; game mechanics are simplified.') },
+    'game-cog': { simp: T('Набор игр и время — по данным Criteria и подготовительных сервисов; механика игр упрощена. Proof It (поиск ошибок в тексте) в профиль не входит.', 'Games and timing per Criteria and prep providers; game mechanics are simplified. Proof It (finding errors in a text) is not included.') },
     'game-aon': { simp: T('6 минут, адаптивный — по данным подготовительных сервисов; механика игры упрощена.', '6 minutes, adaptive — per prep providers; game mechanics are simplified.') }
   };
   function fidOf(p) { var f = FID[p.id] || {}; return { ok: f.ok || null, simp: f.simp || (S.lang === 'ru' ? f.simpRu : null) || null }; }
@@ -6856,7 +6880,8 @@ var ENGINE = (function () {
   }
   // every item is generated from its own seed, so a missed item can be rebuilt exactly for the mistakes review
   function mulberry(a) { return function () { a = (a + 0x6D2B79F5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-  function seeded(seed, f) { var r0 = Math.random; Math.random = mulberry(seed); try { return f(); } finally { Math.random = r0; } }
+  // the item's currency follows the language it is generated in (English: $ and €), so a replay uses the language saved with it
+  function seeded(seed, f, lang) { var r0 = Math.random; Math.random = mulberry(seed); E.setGenLang(lang || S.lang); try { return f(); } finally { Math.random = r0; E.setGenLang(S.lang); } }
   function specRep(spec) {
     var r = { mod: spec.mod, filter: spec.filter || null, exam: !!spec.exam, numMode: spec.numMode || null, interactive: spec.interactive == null ? null : spec.interactive, item: spec.item || null };
     if (spec.wide) r.wide = true;
@@ -6868,18 +6893,29 @@ var ENGINE = (function () {
     try { return { ind: function () { return E.genMatrix(level); }, ded: function () { return E.genOrder(level); }, num: function () { return E.genNumerical(level, { type: 'pct' }); }, verb: function () { return E.genVerbal(E.verbalPlan(lang, 1, 'tfc', 0, 0)[0], 'tfc', level); } }[mod](); } catch (e) { return E.genOrder(level); }
   }
   function replayQ(rep) {
-    var q = seeded(rep.s, function () { return rep.alt ? altGen(rep.alt, rep.lv, rep.lang || S.lang) : genQ(rep.sp, rep.lv); });
+    var q = seeded(rep.s, function () { return rep.alt ? altGen(rep.alt, rep.lv, rep.lang || S.lang) : genQ(rep.sp, rep.lv); }, rep.lang);
     q._rep = rep; return q;
+  }
+  // GEN_VER is raised whenever the generators change; each item keeps the version it was made with, and a saved mistake keeps a
+  // fingerprint of the item, so a retake after an update can tell the person when the rebuilt item is no longer identical
+  var GEN_VER = 33;
+  function qHash(q, lang) {
+    try {
+      var t = L(q.prompt, lang) + '|' + (q.visual ? q.visual(lang) : '') + '|' + q.options.map(function (o) { return o.html(lang); }).join('|') + '|' + JSON.stringify(q.correct) + '|' + JSON.stringify(q.answer || q.assign && q.assign.answer || q.cellAns || null);
+      t = t.replace(/id="[^"]*"|url\(#[^)]*\)|href="#[^"]*"/g, '');
+      var h = 5381; for (var k = 0; k < t.length; k++) h = ((h * 33) ^ t.charCodeAt(k)) >>> 0;
+      return h.toString(36) + t.length.toString(36);
+    } catch (e) { return ''; }
   }
   function safeGen(spec, level) {
     if (spec.rep) return replayQ(spec.rep);
     var base = (Math.random() * 4294967296) >>> 0, sp = specRep(spec);
-    for (var k = 0; k < 3; k++) { var sd = (base + k) >>> 0; try { var q = seeded(sd, function () { return genQ(spec, level); }); q._rep = { s: sd, sp: sp, lv: level, lang: S.lang }; return q; } catch (e) { } }
-    var sd2 = (base + 3) >>> 0, q2 = seeded(sd2, function () { return altGen(spec.mod, level, S.lang); }); q2._rep = { s: sd2, alt: spec.mod, lv: level, lang: S.lang }; return q2;
+    for (var k = 0; k < 3; k++) { var sd = (base + k) >>> 0; try { var q = seeded(sd, function () { return genQ(spec, level); }); q._rep = { s: sd, sp: sp, lv: level, lang: S.lang, v: GEN_VER }; return q; } catch (e) { } }
+    var sd2 = (base + 3) >>> 0, q2 = seeded(sd2, function () { return altGen(spec.mod, level, S.lang); }); q2._rep = { s: sd2, alt: spec.mod, lv: level, lang: S.lang, v: GEN_VER }; return q2;
   }
   function prepareQ() {
     var s = S.ses, spec = s.plan[s.i];
-    if (!s.qs[s.i]) s.qs[s.i] = safeGen(spec, levelFor(spec));
+    if (!s.qs[s.i]) { s.qs[s.i] = safeGen(spec, levelFor(spec)); if (spec.errId) s.qs[s.i]._chg = !!spec.errH && qHash(s.qs[s.i], spec.rep.lang || s.lang) !== spec.errH; }
     var q = s.qs[s.i];
     resetSel(s, q);
     if (s.timer === 'perQ') s.qDeadline = Date.now() + (spec.t || (s.typeT && s.typeT[q.type]) || (Array.isArray(s.perQ) ? s.perQ[(spec.ramp || 2) - 1] : s.perQ)) * 1000;
@@ -6890,7 +6926,7 @@ var ENGINE = (function () {
   }
   // an exam in progress survives a page reload: items are rebuilt from their seeds and the original deadline is kept,
   // so the clock keeps running while the page is closed, as in a real online test
-  var SES_KEY = STORE + '-exam', SES_KEEP = ['kind', 'title', 'subtitle', 'timer', 'total', 'perQ', 'typeT', 'adaptive', 'open', 'level', 'adLevel', 'miss', 'mix', 'src', 'lang', 'started', 'deadline', 'qDeadline', 'i', 'ans', 'plan', 'errIds', 'vaUsed', 'sets'];
+  var SES_KEY = STORE + '-exam', SES_KEEP = ['kind', 'title', 'subtitle', 'timer', 'total', 'perQ', 'typeT', 'adaptive', 'open', 'level', 'adLevel', 'miss', 'mix', 'src', 'lang', 'started', 'deadline', 'qDeadline', 'i', 'ans', 'plan', 'errIds', 'vaUsed', 'sets', 'sel', 'qStart'];
   function saveSes() {
     var s = S.ses; if (!s || s.kind !== 'exam' || s.done) return;
     try { var o = { v: 1 }; SES_KEEP.forEach(function (k) { if (s[k] !== undefined) o[k] = s[k]; }); o.reps = s.qs.map(function (q) { return q ? q._rep : null; }); localStorage.setItem(SES_KEY, JSON.stringify(o)); } catch (e) { }
@@ -6910,7 +6946,10 @@ var ENGINE = (function () {
       s.vaUsed = o.vaUsed; s.sets = o.sets; // replays do not touch these, but keep the saved state exactly
       var q = s.qs[s.i];
       if (!q || s.ans[s.i]) { S.ses = null; clearSes(); return false; }
-      resetSel(s, q);
+      // the answer chosen but not yet sent comes back too, with the time the question was first opened
+      var draft = o.sel; resetSel(s, q);
+      if (draft != null && Array.isArray(s.sel) === Array.isArray(draft) && (!Array.isArray(draft) || draft.length === s.sel.length || q.multi)) s.sel = draft;
+      if (isFinite(o.qStart) && o.qStart <= Date.now()) s.qStart = o.qStart;
       S.view = 'session'; S.confirmQuit = false;
       return true;
     } catch (e) { S.ses = null; clearSes(); return false; }
@@ -6967,7 +7006,7 @@ var ENGINE = (function () {
         DB.err.forEach(function (e) { if (e.id === spec.errId) { if (cr >= 1) e.fixed = now; else { e.n = (e.n || 1) + 1; e.d = now; } } });
       } else if (cr < 1 && q._rep) {
         var id = s.started.toString(36) + '-' + s.i;
-        DB.err.push({ id: id, d: now, k: k, lv: lv, lang: s.lang, kind: s.kind, rep: q._rep, n: 1 });
+        DB.err.push({ id: id, d: now, k: k, lv: lv, lang: s.lang, kind: s.kind, rep: q._rep, h: qHash(q, q._rep.lang || s.lang), n: 1 });
         s.errIds = (s.errIds || []).concat([id]);
         if (DB.err.length > 400) DB.err = DB.err.filter(function (e) { return !e.fixed; }).concat(DB.err.filter(function (e) { return e.fixed; }).slice(-50)).slice(-400);
       }
@@ -6982,7 +7021,7 @@ var ENGINE = (function () {
   function startReplay(list, title) {
     list = list.slice().sort(function (x, y) { return y.d - x.d; }).slice(0, 20).reverse();
     if (!list.length) return;
-    var plan = list.map(function (e) { return { mod: e.k.split(':')[0], rep: e.rep, errId: e.id }; });
+    var plan = list.map(function (e) { return { mod: e.k.split(':')[0], rep: e.rep, errId: e.id, errH: e.h }; });
     beginSession({ kind: 'train', title: title || T('Работа над ошибками', 'Mistakes review'), subtitle: T('Те же задания, что вы решили неверно', 'The same items you got wrong'), plan: plan, timer: 'up', level: 2, src: { type: 'replay', ids: list.map(function (e) { return e.id; }) } });
   }
   function advance() {
@@ -7039,6 +7078,13 @@ var ENGINE = (function () {
   function startTick() { stopTick(); tickId = setInterval(tick, 250); }
   function stopTick() { if (tickId) clearInterval(tickId); tickId = null; }
   // every manual submit checks the clock first: an answer sent after the deadline (e.g. after the device slept) counts as a time-out
+  // any change of answer checks the clock first: if the time ran out while the timer was held back (background tab, sleep),
+  // the answer chosen in time is submitted and the late change is ignored
+  function late() {
+    var s = S.ses; if (!s || s.done) return true;
+    var i = s.i; tick();
+    return S.ses !== s || s.done || s.i !== i || !!s.ans[i];
+  }
   function submitNow() {
     var s = S.ses, i = s.i; tick();
     if (S.ses !== s || s.done || s.i !== i || s.ans[i]) return;
@@ -7175,6 +7221,7 @@ var ENGINE = (function () {
     // st: {idx, total, sel, revealed, review, ans}
     var lang = st.lang;
     var h = '<div class="qcard"' + (st.review ? '' : ' tabindex="-1"') + '><div class="qhead"><span class="qno">' + esc(L(U.q, lang)) + ' ' + (st.idx + 1) + (st.total ? ' ' + esc(L(U.of, lang)) + ' ' + st.total : '') + '</span><span class="qtype">' + esc(L(q.typeName, lang)) + '</span><span class="lvl" title="' + esc(L(U.level, lang)) + '">' + [1, 2, 3].map(function (n) { return '<i class="' + (n <= q.level ? 'on' : '') + '"></i>'; }).join('') + '</span></div>';
+    if (q._chg && !st.review) h += '<p class="note chg">' + esc(L(T('После обновления тренажёра это задание собрано заново и может немного отличаться от того, в котором была ошибка.', 'The trainer has been updated since this mistake, so the item was rebuilt and may differ slightly from the one you got wrong.'), lang)) + '</p>';
     h += '<div class="prompt">' + esc(L(q.prompt, lang)) + '</div>';
     if (q.visual) h += '<div class="visual">' + q.visual(lang) + '</div>';
     if (q.mode === 'input' || q.mode === 'assign' || q.mode === 'bars' || q.mode === 'cells') {
@@ -7473,7 +7520,8 @@ var ENGINE = (function () {
       blocks: [
         ['Алгоритм на один вопрос', 'Routine for one item', [
           ['Сначала прочитайте вопрос, потом ищите в таблице только нужное: строку, столбец, год.', 'Read the question first, then look up only what you need: row, column, year.'],
-          ['Проверьте единицы: тысячи или миллионы, сутки или год, доллары или рубли, проценты или процентные пункты. Прочитайте сноски.', 'Check the units: thousands or millions, per day or per year, dollars or roubles, percent or percentage points. Read the footnotes.'],
+          ['Валюта зависит от языка: в русской версии суммы в рублях, а задания на курс — пересчёт долларов в рубли; в английской, рассчитанной на работодателей вне России, суммы в долларах, а задания на курс — пересчёт долларов в евро (курс в евро за доллар).', 'The currency depends on the language: the Russian version uses roubles and converts dollars into roubles; the English version, aimed at employers outside Russia, uses US dollars and converts dollars into euros (rate in euros per dollar).'],
+          ['Проверьте единицы: тысячи или миллионы, сутки или год, доллары или рубли, проценты или процентные пункты. Прочитайте сноски.', 'Check the units: thousands or millions, per day or per year, dollars or euros, percent or percentage points. Read the footnotes.'],
           ['Прикиньте порядок ответа в уме и отбросьте явно нереальные варианты.', 'Estimate the order of magnitude and drop clearly unrealistic options.'],
           ['Посчитайте на калькуляторе (обычно разрешён — проверьте инструкцию) и сверьте с вариантами.', 'Calculate (a calculator is usually allowed — check the instructions) and compare with the options.'],
           ['Если результат не совпадает ни с одним вариантом, проверьте базу процента и период.', 'If your result matches no option, check the percentage base and the period.']
@@ -7496,7 +7544,7 @@ var ENGINE = (function () {
           ['Удельный показатель: затраты ÷ объём за тот же период. Суточную добычу сначала умножьте на 365.', 'Unit metric: cost ÷ volume for the same period. Multiply daily output by 365 first.'],
           ['Средняя цена = выручка ÷ объём, а не среднее арифметическое цен.', 'Average price = revenue ÷ volume, not the simple average of prices.'],
           ['Рублёвая цена = цена в долларах × курс. Её изменение зависит и от цены, и от курса.', 'Rouble price = dollar price × exchange rate. Its change depends on both.'],
-          ['Если цена выросла на a%, а курс на b%, рублёвая цена изменилась на [(1 + a/100)(1 + b/100) − 1] × 100%, а не на (a + b)%.', 'If the price rose by a% and the exchange rate by b%, the rouble price changed by [(1 + a/100)(1 + b/100) − 1] × 100%, not by (a + b)%.']
+          ['Если цена выросла на a%, а курс на b%, рублёвая цена изменилась на [(1 + a/100)(1 + b/100) − 1] × 100%, а не на (a + b)%.', 'If the price rose by a% and the exchange rate by b%, the price in the other currency changed by [(1 + a/100)(1 + b/100) − 1] × 100%, not by (a + b)%.']
         ]],
         ['Как решать по типам данных', 'How to handle each type of data', [
           ['<b>Круговая диаграмма.</b> Сумма по статье = доля × итог. Разница двух статей в деньгах = (доля 1 − доля 2) × итог; сама разница долей — это процентные пункты. Если выросла одна статья, вырос и итог: новая доля = новая сумма статьи ÷ новый итог.', '<b>Pie chart.</b> An item’s amount = share × total. The money gap between two items = (share 1 − share 2) × total; the gap in shares alone is percentage points. If one item grows, the total grows too: new share = the item’s new amount ÷ the new total.'],
@@ -7685,6 +7733,7 @@ var ENGINE = (function () {
           ['<b>Тренировка.</b> Без ограничения времени, можно выбрать нужные типы заданий. После каждого ответа — разбор: правило и почему неверен каждый вариант.', '<b>Practice.</b> No time limit, and you choose the question types. After every answer you see the rule and why each wrong option is wrong.'],
           ['<b>Экзамен.</b> Число вопросов, таймер и порядок — как у провайдера: общий таймер у SHL, Watson-Glaser и KFALP, свой таймер на вопрос у Korn Ferry Elements, ЭКОПСИ и игровых тестов. Там, где реальный тест адаптивный, сложность в тренажёре тоже меняется по ответам. Итог и разбор ошибок — в конце; при досрочном выходе неотвеченные вопросы считаются неверными.', '<b>Exam.</b> Item count, timer and order follow the provider: one timer for SHL, Watson-Glaser and KFALP, a timer per item for Korn Ferry Elements, Ecopsy and the game-based tests. Where the real test is adaptive, difficulty here also follows your answers. Score and review come at the end; if you stop early, unanswered items count as wrong.'],
           ['<b>Сложность на экзамене.</b> Уровень, выбранный для тренировки, на экзамен не влияет. Неадаптивные экзамены идут на уровне Senior; в SHL Verify Verbal Reasoning около трети утверждений — уровня эксперт. Адаптивные экзамены начинаются с Senior (KFALP и Switch для менеджеров — с базового) и дальше меняются по ответам. В Switch (числовой и вербальный) задания идут от лёгких к сложным. Aon switchChallenge начинается с базового уровня, длится 6 минут и подстраивается под ответы: верно — задание сложнее, ошибка — проще; результат — сколько заданий решено верно.', '<b>Exam difficulty.</b> The practice level does not apply to exams. Non-adaptive exams run at Senior; in SHL Verify Verbal Reasoning about a third of the statements are Expert level. Adaptive exams start at Senior (KFALP and Switch for managers start at Basic) and then follow your answers. Switch Numerical and Verbal go from easy to hard. Aon switchChallenge starts at Basic, lasts 6 minutes and adapts: right → harder, wrong → easier; the score is how many items you solve correctly.'],
+          ['<b>Условные данные.</b> Компании, правила, налоги, тарифы и цифры в заданиях придуманы для тренировки и не описывают действующие нормы какой-либо страны. Отвечайте только по тексту и данным задания. Реальны только курсы валют Залива: это официальные привязки к доллару (значения — в разделе «Числовой»), а курс кувейтского динара — приближение на дату расчёта.', '<b>Illustrative data.</b> Companies, rules, taxes, tariffs and figures in the items are made up for practice and do not describe the current rules of any country. Answer from the text and data of the item only. The only real inputs are the Gulf currency rates: these are the official dollar pegs (values under “Numerical”), and the Kuwaiti dinar rate is an approximation at the calculation date.'],
           ['<b>Частичные баллы.</b> В интерактивных заданиях SHL (рассадка, ранжирование, графики и таблицы) в тренировке частично верный ответ даёт часть балла — по доле верно заполненных строк, чтобы было видно, насколько вы близки. На экзамене такие задания засчитываются только полностью верными: SHL упоминает «multi-point scoring», но не раскрывает, как начисляются баллы за частично верный ответ, а случайное заполнение рассадки давало бы около трети балла. В «Уравнениях на скорость» (Cognify) засчитывается каждый найденный вариант, а каждая лишняя отметка отнимает один найденный — и в тренировке, и на экзамене. В остальных заданиях с несколькими ответами (числовые «Несколько верных», выбор 1–2 утверждений) балл дают только за полностью верный набор.', '<b>Partial credit.</b> In SHL interactive items (rooms, ranking, charts and tables) practice gives part of the point for a partly right answer — by the share of rows filled correctly — so you can see how close you were. In exams these items count only when fully right: SHL mentions “multi-point scoring” but does not say how a partly right answer is scored, and random filling of a room plan would earn about a third of a point. In Equation bubbles (Cognify) every right tick counts and every wrong tick cancels one right tick, in practice and exams alike. Other multi-answer items (numerical “Several correct”, choosing 1–2 statements) score only when the whole set is right.']
         ]],
         ['Управление и данные', 'Controls and data', [
@@ -7699,7 +7748,7 @@ var ENGINE = (function () {
           ['Если на новом уровне результат ниже 50%, вернитесь на предыдущий и потренируйте слабые типы заданий.', 'If you score under 50% at the new level, step back and drill your weak question types.']
         ], true],
         ['Статистика', 'Progress', [
-          ['Во вкладке «Статистика» видно, какие типы заданий получаются хуже всего; результаты можно отфильтровать по языку, уровню и режиму. Тип оценивается, когда по нему есть хотя бы 5 ответов. Кнопка «Тренировать» открывает тренировку только по этому типу.', 'The Progress tab shows which question types go worst; you can filter results by language, level and mode. A type is rated once it has at least 5 answers. “Practise” opens a session of that type only.'], ['<b>Работа над ошибками.</b> Каждое задание, решённое неверно или не полностью, попадает в список ошибок. «Повторить» даёт в точности те же задания, «Похожие» — новые задания того же типа и уровня. Ошибка снимается, когда то же задание решено полностью верно. Повторы не входят в точность по типам: она считается только по новым заданиям. Ошибки последней сессии можно повторить сразу с экрана результатов.', '<b>Mistakes review.</b> Every item you get wrong or only partly right goes on the mistakes list. “Retry” gives exactly the same items; “Similar” gives new items of the same type and level. A mistake is cleared when you solve the same item fully right. Retakes do not count towards accuracy by type, which uses fresh items only. You can retry the last session’s mistakes straight from the results screen.'],
+          ['Во вкладке «Статистика» видно, какие типы заданий получаются хуже всего; результаты можно отфильтровать по языку, уровню и режиму. Тип оценивается, когда по нему есть хотя бы 5 ответов. Кнопка «Тренировать» открывает тренировку только по этому типу.', 'The Progress tab shows which question types go worst; you can filter results by language, level and mode. A type is rated once it has at least 5 answers. “Practise” opens a session of that type only.'], ['<b>Работа над ошибками.</b> Каждое задание, решённое неверно или не полностью, попадает в список ошибок. «Повторить» даёт в точности те же задания, «Похожие» — новые задания того же типа и уровня. Ошибка снимается, когда то же задание решено полностью верно. Повторы не входят в точность по типам: она считается только по новым заданиям. Ошибки последней сессии можно повторить сразу с экрана результатов. Если тренажёр обновился и задание собралось уже не точно таким же, над ним будет пометка.', '<b>Mistakes review.</b> Every item you get wrong or only partly right goes on the mistakes list. “Retry” gives exactly the same items; “Similar” gives new items of the same type and level. A mistake is cleared when you solve the same item fully right. Retakes do not count towards accuracy by type, which uses fresh items only. You can retry the last session’s mistakes straight from the results screen. If the trainer has been updated and the item no longer rebuilds exactly the same, a note above it says so.'],
           ['Процент верных в тренажёре — не процентиль реального теста: там результат сравнивают с группой других кандидатов (см. «Форматы тестов → Как оценивается результат»). Используйте тренажёр, чтобы видеть рост и слабые места.', 'Your percentage here is not a real test percentile: there your score is compared with other candidates (see “Test formats → How results are scored”). Use the trainer to track progress and weak spots.']
         ]]
       ]
@@ -7810,7 +7859,7 @@ var ENGINE = (function () {
       'Все тесты Verify Interactive адаптивные (так указано в фактлистах SHL); число вопросов в фактлистах — максимальное.',
       'Verify Verbal Reasoning (раньше — CEB SHL Verbal Reasoning) снят SHL с использования в 2024 году; замены по данным SHL — Verify Verbal Ability, Verify Deductive Reasoning и Verify Interactive Deductive. Формат теста: до 30 утверждений за 19 минут, формат «Верно / Неверно / Нельзя сказать», около 38 секунд на ответ. Длину текстов и число утверждений к тексту SHL не публикует; по сайтам подготовки — от одного абзаца до длинного текста с несколькими утверждениями, поэтому в экзамене тренажёра короткие и длинные тексты перемешаны. Экзамен оставлен для отработки формата «Верно / Неверно / Нельзя сказать».',
       'Verify Verbal Ability — до 18 вопросов за 15 минут, адаптивный, выбор ответа; проверяет понимание текста: детали, главную мысль, обоснованные выводы, тон и цель автора, как автор отреагировал бы (фактлист SHL). Сколько вариантов ответа и сколько вопросов к одному тексту, SHL не публикует; сайты подготовки дают короткий текст в один абзац, один вопрос и 4 варианта. Так устроен и экзамен в тренажёре: 18 текстов, адаптивная сложность, 15 минут.',
-      'Verify Interactive G+ — до 24 интерактивных вопросов за 36 минут, по 8 числовых, индуктивных и дедуктивных вперемешку. Неинтерактивный Verify G+ — 30 вопросов за 36 минут.',
+      'Verify Interactive G+ — до 24 интерактивных вопросов за 36 минут, числовые, индуктивные и дедуктивные вперемешку (сколько каких, SHL не указывает; в тренажёре — поровну, по 8). Неинтерактивный Verify G+ — 30 вопросов за 36 минут.',
       'Неинтерактивные тесты Verify, которых нет в списке снятых в 2024 году: Inductive Reasoning (версия 2014 г.) — до 18 вопросов за 24 мин, Numerical Ability — до 16 за 20 мин, Deductive Reasoning — до 18 за 20 мин, Verbal Ability (см. выше). В 2024 году сняты Verbal Reasoning, Numerical Reasoning (18 вопросов до 25 мин), Inductive Reasoning первой версии (2007), Calculation, Checking (заменён версией 2022 г.), Mechanical Comprehension 2010 и Reading Comprehension.',
       'По данным подготовительных сервисов, SHL засчитывает только верные ответы и не штрафует за ошибки, если в инструкции не сказано иное. Поэтому выгоднее ответить на всё, чем оставить вопросы пустыми.'
     ] : [
@@ -7820,7 +7869,7 @@ var ENGINE = (function () {
       'All Verify Interactive tests are adaptive, per SHL fact sheets; the item counts given are maximums.',
       'Verify Verbal Reasoning (formerly CEB SHL Verbal Reasoning) was retired by SHL during 2024; SHL names Verify Verbal Ability, Verify Deductive Reasoning and Verify Interactive Deductive as replacements. The format: up to 30 statements in 19 minutes, True / False / Cannot say, about 38 seconds each. SHL does not publish passage length or statements per passage; prep sites describe anything from one paragraph to a longer text with several statements, so the trainer’s exam mixes short and long passages. The exam is kept so you can practise the True / False / Cannot say format.',
       'Verify Verbal Ability — up to 18 items in 15 minutes, adaptive, multiple choice; it tests reading comprehension: details, the main idea, supported inferences, the author’s tone and purpose, how the author would respond (SHL fact sheet). SHL does not publish the number of options or how many questions go with each passage; prep sites use a one-paragraph passage, one question and 4 options. The trainer’s exam works the same way: 18 passages, adaptive difficulty, 15 minutes.',
-      'Verify Interactive G+ — up to 24 interactive items in 36 minutes, 8 each of numerical, inductive and deductive, mixed. The non-interactive Verify G+ has 30 items in 36 minutes.',
+      'Verify Interactive G+ — up to 24 interactive items in 36 minutes, numerical, inductive and deductive mixed (SHL does not say how many of each; the trainer uses an even 8 of each). The non-interactive Verify G+ has 30 items in 36 minutes.',
       'Non-interactive Verify tests not on SHL’s 2024 retirement list: Inductive Reasoning (2014 version) up to 18 items in 24 min, Numerical Ability up to 16 in 20 min, Deductive Reasoning up to 18 in 20 min, Verbal Ability (see above). Retired during 2024: Verbal Reasoning, Numerical Reasoning (18 items in up to 25 min), Inductive Reasoning v1 (2007), Calculation, Checking (replaced by the 2022 version), Mechanical Comprehension 2010 and Reading Comprehension.',
       'According to prep providers, SHL counts only correct answers and does not penalise wrong ones unless the instructions say otherwise, so answering everything beats leaving items blank.'
     ], SRC + [
@@ -7950,16 +7999,16 @@ var ENGINE = (function () {
       case 'ret-go': S.retAsk = null; startExam(v); break;
       case 'ret-no': { var back = S.retAsk; S.retAsk = null; render(); try { document.querySelector('[data-act="exam"][data-v="' + back + '"]').focus(); } catch (e) { } break; }
       case 'weak': startPractice(el.getAttribute('data-m'), v ? [v] : [], S.stF.lv !== 'all' ? +S.stF.lv : null); break;
-      case 'opt': if (s && Date.now() - s.qStart < 350) break; selectOpt(+v); break;
+      case 'opt': if (s && Date.now() - s.qStart < 350) break; if (late()) break; selectOpt(+v); break;
       case 'barstep': {
-        if (!s || s.revealed || s.done) break;
+        if (!s || s.revealed || s.done || late()) break;
         var bk = +el.getAttribute('data-k'), qb = s.qs[s.i], cur = s.sel[bk] == null ? Math.round(qb.bars.max / 2) : s.sel[bk];
         s.sel[bk] = Math.max(0, Math.min(qb.bars.max, cur + (+el.getAttribute('data-d')) * qb.bars.step));
-        render(); var nb3 = app.querySelector('[data-act="barstep"][data-k="' + bk + '"][data-d="' + el.getAttribute('data-d') + '"]'); if (nb3) nb3.focus({ preventScroll: true });
+        saveSes(); render(); var nb3 = app.querySelector('[data-act="barstep"][data-k="' + bk + '"][data-d="' + el.getAttribute('data-d') + '"]'); if (nb3) nb3.focus({ preventScroll: true });
         break;
       }
       case 'asg': {
-        if (!s || s.revealed || s.done || Date.now() - s.qStart < 350) break;
+        if (!s || s.revealed || s.done || Date.now() - s.qStart < 350 || late()) break;
         var r = +el.getAttribute('data-r'), c = +el.getAttribute('data-c'), qa = s.qs[s.i];
         if (s.sel[r] === c) s.sel[r] = null;
         else {
@@ -7967,7 +8016,7 @@ var ENGINE = (function () {
           else if (s.sel.filter(function (x, k) { return x === c && k !== r; }).length >= qa.assign.cap) { toast(tr(T('Здесь уже ' + qa.assign.cap + ' — сначала уберите кого-то.', 'This one already holds ' + qa.assign.cap + ' — remove someone first.'))); break; }
           s.sel[r] = c;
         }
-        render();
+        saveSes(); render();
         var nb2 = app.querySelector('.asg button[data-r="' + r + '"][data-c="' + c + '"]'); if (nb2) nb2.focus({ preventScroll: true });
         break;
       }
@@ -7997,7 +8046,7 @@ var ENGINE = (function () {
     if (r) { r.setAttribute('y', barY(B, v).toFixed(1)); r.setAttribute('height', Math.max(0, BG.H - BG.mb - barY(B, v)).toFixed(1)); r.removeAttribute('fill-opacity'); }
     if (tx) { tx.setAttribute('y', (barY(B, v) - 8).toFixed(1)); tx.textContent = E.fmt(v, 0, S.ses.lang); }
     if (inp && document.activeElement !== inp) inp.value = v;
-    syncBtns();
+    syncBtns(); saveSes();
   }
   var dragK = null;
   function barFromEvent(ev, svg) {
@@ -8006,19 +8055,20 @@ var ENGINE = (function () {
   }
   app.addEventListener('pointerdown', function (ev) {
     var t = ev.target; if (!t || !t.getAttribute || t.getAttribute('data-bar') == null) return;
-    var s = S.ses; if (!s || s.revealed || s.done) return;
+    var s = S.ses; if (!s || s.revealed || s.done || late()) return;
     dragK = +t.getAttribute('data-bar'); var svg = t.ownerSVGElement; try { t.setPointerCapture(ev.pointerId); } catch (e) {}
     setBarDom(dragK, barFromEvent(ev, svg)); ev.preventDefault();
   });
-  app.addEventListener('pointermove', function (ev) { if (dragK == null) return; var t = ev.target; var svg = t.ownerSVGElement || app.querySelector('.ibars svg'); if (svg) setBarDom(dragK, barFromEvent(ev, svg)); });
+  app.addEventListener('pointermove', function (ev) { if (dragK == null) return; if (late()) { dragK = null; return; } var t = ev.target; var svg = t.ownerSVGElement || app.querySelector('.ibars svg'); if (svg) setBarDom(dragK, barFromEvent(ev, svg)); });
   ['pointerup', 'pointercancel'].forEach(function (nm) { app.addEventListener(nm, function () { dragK = null; }); });
   app.addEventListener('input', function (ev) {
     var t = ev.target, s0 = S.ses; if (!t || !t.getAttribute || !s0 || s0.revealed || s0.done) return;
-    if (t.getAttribute('data-cell') != null) { s0.sel[+t.getAttribute('data-cell')] = t.value === '' ? null : t.value; syncBtns(); return; }
+    if ((t.getAttribute('data-cell') != null || t.getAttribute('data-bar-in') != null || t.getAttribute('data-num')) && late()) return;
+    if (t.getAttribute('data-cell') != null) { s0.sel[+t.getAttribute('data-cell')] = t.value === '' ? null : t.value; syncBtns(); saveSes(); return; }
     if (t.getAttribute('data-bar-in') != null) { var bq = s0.qs[s0.i].bars, bv = parseNum(t.value); if (isFinite(bv)) setBarDom(+t.getAttribute('data-bar-in'), Math.max(0, Math.min(bq.max, Math.round(bv / bq.step) * bq.step))); return; }
     if (!t.getAttribute('data-num')) return;
     var s = S.ses; if (!s || s.revealed || s.done) return;
-    s.sel = t.value === '' ? null : t.value;
+    s.sel = t.value === '' ? null : t.value; saveSes();
     var ok = hasSel();
     app.querySelectorAll('[data-act="check"],[data-act="submit"]').forEach(function (b) { b.disabled = !ok; });
   });
@@ -8043,7 +8093,7 @@ var ENGINE = (function () {
       else { s.sel.push(i); if (q.mod === 'verb' && s.sel.length > q.correct.length) s.sel.shift(); } // Korn Ferry: exactly as many as the question asks
     }
     else s.sel = i;
-    render();
+    saveSes(); render();
     var b = app.querySelector('.opt[data-v="' + i + '"]'); if (b) b.focus({ preventScroll: true });
   }
   document.addEventListener('keydown', function (ev) {
@@ -8054,7 +8104,7 @@ var ENGINE = (function () {
     var inField = ev.target && ev.target.tagName === 'INPUT';
     var map = { '1': 0, '2': 1, '3': 2, '4': 3, '5': 4, '6': 5, '7': 6, '8': 7, '9': 8, a: 0, b: 1, c: 2, d: 3, e: 4, f: 5, g: 6, h: 7, i: 8, j: 9, k: 10, l: 11, m: 12, n: 13, o: 14, p: 15, q: 16, r: 17, s: 18, t: 19 };
     var cq = s.qs[s.i];
-    if (map[k] != null && !s.revealed && !inField && cq && !cq.mode) { ev.preventDefault(); if (Date.now() - s.qStart >= 350) selectOpt(map[k]); return; }
+    if (map[k] != null && !s.revealed && !inField && cq && !cq.mode) { ev.preventDefault(); if (Date.now() - s.qStart >= 350 && !late()) selectOpt(map[k]); return; }
     if (k === 'enter') {
       var tg = ev.target;
       if (tg && tg.closest && (tg.closest('.opt') || tg.closest('.asg') || tg.closest('.barctl') || tg.closest('[data-act="quit"],[data-act="quit-yes"],[data-act="quit-no"]'))) return;
