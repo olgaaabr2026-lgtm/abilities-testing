@@ -6996,7 +6996,8 @@ var ENGINE = (function () {
     // interactive grids get partial credit in practice only (SHL does not publish multi-point scoring); exams count only a fully right answer
     var cr = ok ? 1 : !chosen ? 0 : q.type === 'bubbles' ? bubbleCredit(q, chosen) : s.kind === 'exam' ? 0 : q.mode === 'assign' ? chosen.filter(function (v, i) { return v === q.assign.answer[i]; }).length / q.assign.answer.length : (q.mode === 'bars' || q.mode === 'cells') ? partOk(q, chosen).filter(Boolean).length / partOk(q, chosen).length : 0;
     s.ans[s.i] = { chosen: chosen, ok: ok, cr: cr, ms: Date.now() - s.qStart, timeout: !!timedOut, lv: q.level };
-    logAnswer(s, q, cr);
+    // an item that may have changed with an update and timed out without an answer gives the exam score 0, but no mistake or log entry
+    if (!(q._chg === 'exam' && timedOut && chosen == null)) logAnswer(s, q, cr);
     if (s.adaptive === 'eco') { // Switch: a miss keeps the level, a second miss in a row lowers it
       if (ok) { s.adLevel = Math.min(3, s.adLevel + 1); s.miss = 0; } else { s.miss = (s.miss || 0) + 1; if (s.miss >= 2) { s.adLevel = Math.max(1, s.adLevel - 1); s.miss = 0; } }
     } else if (s.adaptive) s.adLevel = ok ? Math.min(3, s.adLevel + 1) : (s.adaptive === 'up' ? s.adLevel : Math.max(1, s.adLevel - 1)); // KFALP: a miss keeps the level
@@ -7029,7 +7030,7 @@ var ENGINE = (function () {
     list = list.slice().sort(function (x, y) { return y.d - x.d; }).slice(0, 20).reverse();
     if (!list.length) return;
     var plan = list.map(function (e) { return { mod: e.k.split(':')[0], rep: e.rep, errId: e.id, errH: e.h }; });
-    beginSession({ kind: 'train', title: title || T('Работа над ошибками', 'Mistakes review'), subtitle: T('Те же задания, что вы решили неверно', 'The same items you got wrong'), plan: plan, timer: 'up', level: 2, src: { type: 'replay', ids: list.map(function (e) { return e.id; }) } });
+    beginSession({ kind: 'train', title: title || T('Работа над ошибками', 'Mistakes review'), subtitle: T('Задания, которые вы решили неверно', 'Items you got wrong'), plan: plan, timer: 'up', level: 2, src: { type: 'replay', ids: list.map(function (e) { return e.id; }) } });
   }
   function advance() {
     var s = S.ses;
@@ -7100,12 +7101,14 @@ var ENGINE = (function () {
   function tick() {
     var s = S.ses; if (!s || s.done || S.view !== 'session') return;
     var el = document.getElementById('timer'); var now = Date.now(), txt, warn = false;
+    // while the "trainer was updated" dialog is open nothing is scored: the clock is shown, but time-outs wait for the person's choice
+    var hold = !!S.updAsk;
     if (s.timer === 'global') {
       var left = s.deadline - now; txt = mmss(left); warn = left < s.total * 1000 * 0.15;
-      if (left <= 0) { if (!s.ans[s.i] && (hasSel() || (s.qs[s.i] && s.qs[s.i].mode === 'assign' && s.sel.some(function (v) { return v != null; })))) record(true); finish(true); return; }
+      if (left <= 0 && !hold) { if (!s.ans[s.i] && (hasSel() || (s.qs[s.i] && s.qs[s.i].mode === 'assign' && s.sel.some(function (v) { return v != null; })))) record(true); finish(true); return; }
     } else if (s.timer === 'perQ') {
       var lq = s.qDeadline - now; txt = mmss(lq); warn = lq < 15000;
-      if (lq <= 0) { record(true); if (s.i < s.plan.length - 1) toast(tr(U.timeoutToast)); advance(); return; }
+      if (lq <= 0 && !hold) { record(true); if (s.i < s.plan.length - 1) toast(tr(U.timeoutToast)); advance(); return; }
     } else { txt = mmss(now - s.started); }
     if (el) { el.firstChild.nodeValue = txt; el.classList.toggle('warn', warn); }
   }
@@ -7434,7 +7437,7 @@ var ENGINE = (function () {
     h += '<div class="panel rv-panel"><h3>' + esc(tr(T('Работа над ошибками', 'Mistakes review'))) + '</h3>';
     if (!errs.length) h += '<p class="sum-tip">' + esc(tr(fixed ? fixTx(['Нерешённых ошибок нет. ', 'No open mistakes. ']) : T('Здесь соберутся задания, решённые неверно, — их можно будет пройти ещё раз в точности такими же.', 'Items you get wrong will collect here, and you can retake exactly the same items.'))) + '</p>';
     else {
-      h += '<p class="sum-tip">' + esc(tr(T('Ошибка снимается, когда то же задание решено полностью верно. «Повторить» — те же задания; «Похожие» — новые задания того же типа и уровня.', 'A mistake is cleared when you solve the same item fully right. “Retry” gives the same items; “Similar” gives new items of the same type and level.'))) + (fixed ? ' ' + esc(tr(fixTx(['', '']))) : '') + '</p>';
+      h += '<p class="sum-tip">' + esc(tr(T('Ошибка снимается, когда то же задание решено полностью верно. «Повторить» — те же задания (если тренажёр с тех пор обновился, задание собирается заново и над ним есть пометка); «Похожие» — новые задания того же типа и уровня.', 'A mistake is cleared when you solve the same item fully right. “Retry” gives the same items (if the trainer has been updated since, the item is rebuilt and carries a note); “Similar” gives new items of the same type and level.'))) + (fixed ? ' ' + esc(tr(fixTx(['', '']))) : '') + '</p>';
       if (nRep) h += '<div class="actions" style="margin-top:10px"><button class="btn btn-primary" data-act="rv-all">' + esc(tr(T('Повторить ошибки', 'Retry mistakes'))) + ' · ' + Math.min(nRep, 20) + (nRep > 20 ? ' / ' + nRep : '') + '</button></div>';
       h += '<div class="bars" style="margin-top:12px">' + Object.keys(byK).sort(function (x, y) { return byK[y] - byK[x]; }).map(function (k) {
         return '<div class="rv-row"><span class="lb">' + esc(tr(TYPE_LABEL[k] || T(k, k))) + '</span><span class="v">' + byK[k] + '</span><button class="btn btn-ghost btn-sm" data-act="rv-type" data-v="' + k + '">' + esc(tr(T('Повторить', 'Retry'))) + '</button><button class="btn btn-ghost btn-sm" data-act="rv-like" data-v="' + k + '">' + esc(tr(T('Похожие', 'Similar'))) + '</button></div>';
@@ -7759,7 +7762,7 @@ var ENGINE = (function () {
           ['Если на новом уровне результат ниже 50%, вернитесь на предыдущий и потренируйте слабые типы заданий.', 'If you score under 50% at the new level, step back and drill your weak question types.']
         ], true],
         ['Статистика', 'Progress', [
-          ['Во вкладке «Статистика» видно, какие типы заданий получаются хуже всего; результаты можно отфильтровать по языку, уровню и режиму. Тип оценивается, когда по нему есть хотя бы 5 ответов. Кнопка «Тренировать» открывает тренировку только по этому типу.', 'The Progress tab shows which question types go worst; you can filter results by language, level and mode. A type is rated once it has at least 5 answers. “Practise” opens a session of that type only.'], ['<b>Работа над ошибками.</b> Каждое задание, решённое неверно или не полностью, попадает в список ошибок. «Повторить» даёт в точности те же задания, «Похожие» — новые задания того же типа и уровня. Ошибка снимается, когда то же задание решено полностью верно. Повторы не входят в точность по типам: она считается только по новым заданиям. Ошибки последней сессии можно повторить сразу с экрана результатов. Если тренажёр обновился и задание собралось уже не точно таким же, над ним будет пометка; у ошибок, записанных до версии 33, совпадение проверить нельзя, и об этом тоже предупреждает пометка. Ошибка, закрытая решением такого обновлённого задания, в статистике считается отдельно.', '<b>Mistakes review.</b> Every item you get wrong or only partly right goes on the mistakes list. “Retry” gives exactly the same items; “Similar” gives new items of the same type and level. A mistake is cleared when you solve the same item fully right. Retakes do not count towards accuracy by type, which uses fresh items only. You can retry the last session’s mistakes straight from the results screen. If the trainer has been updated and the item no longer rebuilds exactly the same, a note above it says so; mistakes saved before version 33 cannot be checked, and a note says that too. A mistake cleared by solving such an updated item is counted separately in the stats.'],
+          ['Во вкладке «Статистика» видно, какие типы заданий получаются хуже всего; результаты можно отфильтровать по языку, уровню и режиму. Тип оценивается, когда по нему есть хотя бы 5 ответов. Кнопка «Тренировать» открывает тренировку только по этому типу.', 'The Progress tab shows which question types go worst; you can filter results by language, level and mode. A type is rated once it has at least 5 answers. “Practise” opens a session of that type only.'], ['<b>Работа над ошибками.</b> Каждое задание, решённое неверно или не полностью, попадает в список ошибок. «Повторить» даёт те же задания — в точности такими же, если тренажёр с тех пор не обновлялся, «Похожие» — новые задания того же типа и уровня. Ошибка снимается, когда то же задание решено полностью верно. Повторы не входят в точность по типам: она считается только по новым заданиям. Ошибки последней сессии можно повторить сразу с экрана результатов. Если тренажёр обновился и задание собралось уже не точно таким же, над ним будет пометка; у ошибок, записанных до версии 33, совпадение проверить нельзя, и об этом тоже предупреждает пометка. Ошибка, закрытая решением такого обновлённого задания, в статистике считается отдельно.', '<b>Mistakes review.</b> Every item you get wrong or only partly right goes on the mistakes list. “Retry” gives the same items — exactly the same if the trainer has not been updated since; “Similar” gives new items of the same type and level. A mistake is cleared when you solve the same item fully right. Retakes do not count towards accuracy by type, which uses fresh items only. You can retry the last session’s mistakes straight from the results screen. If the trainer has been updated and the item no longer rebuilds exactly the same, a note above it says so; mistakes saved before version 33 cannot be checked, and a note says that too. A mistake cleared by solving such an updated item is counted separately in the stats.'],
           ['Процент верных в тренажёре — не процентиль реального теста: там результат сравнивают с группой других кандидатов (см. «Форматы тестов → Как оценивается результат»). Используйте тренажёр, чтобы видеть рост и слабые места.', 'Your percentage here is not a real test percentile: there your score is compared with other candidates (see “Test formats → How results are scored”). Use the trainer to track progress and weak spots.']
         ]]
       ]
@@ -8092,7 +8095,10 @@ var ENGINE = (function () {
     var d = ev.target; if (!d.matches || !d.matches('details[data-i]') || !d.open) return;
     var box = d.querySelector('.rv'); if (box.childElementCount) return;
     var s = S.ses, i = +d.getAttribute('data-i');
-    box.innerHTML = qHtml(s.qs[i], { idx: i, total: s.open ? null : s.plan.length, sel: s.ans[i].chosen, revealed: true, ans: s.ans[i], lang: s.lang, review: true }); markScroll(box);
+    var qi = s.qs[i];
+    if (qi._chg === 'exam') box.innerHTML = '<p class="note chg">' + esc(L(T('Это задание изменилось после обновления тренажёра во время экзамена. Балл выставлен по варианту, на который вы отвечали до обновления; исходного условия и ключа в новой версии нет, поэтому разбор по новому ключу не показывается.', 'This item changed when the trainer was updated during the exam. The score was given for the version you answered before the update; the original wording and key are not available in the new version, so no review against the new key is shown.'), s.lang)) + '</p>';
+    else box.innerHTML = qHtml(qi, { idx: i, total: s.open ? null : s.plan.length, sel: s.ans[i].chosen, revealed: true, ans: s.ans[i], lang: s.lang, review: true });
+    markScroll(box);
   }, true);
   function hasSelQ(q, sel) { return q.multi ? sel.length > 0 : q.mode === 'input' ? isFinite(parseNum(sel)) : q.mode === 'assign' || q.mode === 'bars' ? sel.every(function (v) { return v != null; }) : q.mode === 'cells' ? sel.every(function (v) { return isFinite(parseNum(v)); }) : sel != null; }
   function hasSel() { var s = S.ses; return hasSelQ(s.qs[s.i], s.sel); }
