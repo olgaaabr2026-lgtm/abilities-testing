@@ -99,6 +99,10 @@ button{font:inherit;color:inherit}
 .row-main b{display:block;font-weight:600}
 .meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px}
 .tag{font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line-2);color:var(--ink-2)}
+.tag.fid-ok{background:var(--ok-soft);border-color:#B9DCC8;color:var(--ok)}
+.tag.fid-simp{background:#FBF1DF;border-color:#EBD3A6;color:#8A5A0E}
+.fid{margin:6px 0 0;font-size:12.5px;color:var(--muted);line-height:1.45}
+.fid .fo{color:var(--ok);font-weight:600}.fid .fs{color:#8A5A0E;font-weight:600}
 .tag.hot{background:var(--accent-soft);border-color:#F3C9B8;color:var(--accent-ink)}
 
 /* session */
@@ -336,6 +340,10 @@ button{font:inherit;color:inherit}
 .asg button.bad{background:var(--bad);border-color:var(--bad);color:#fff}
 .asg button.miss{border-color:var(--ok);border-style:dashed;color:var(--ok)}
 .asg button:disabled{cursor:default}
+.asg.many{table-layout:fixed}
+.asg.many th{font-size:11px;line-height:1.2;overflow-wrap:normal;hyphens:auto;-webkit-hyphens:auto;vertical-align:bottom}
+.asg.many th.who,.asg.many td.who{width:21%;font-size:13px;overflow-wrap:anywhere}
+.asg.many button{min-width:0}
 .asg-cnt{font-size:12.5px;color:var(--muted);margin-top:4px}
 .asg-cnt b.over{color:var(--bad)}
 
@@ -560,12 +568,14 @@ var ENGINE = (function () {
         cAttrs.forEach(function (ca) { var F2 = Object.assign({}, bF); F2[ca] = alt[ca]; poolO.push(F2); });
       }
       var nd = function (F) { return present.filter(function (a) { return F[a] !== correct[a]; }).length; };
-      var picked = null, needAll = level >= 2;
-      for (var t2 = 0; t2 < 160 && !picked; t2++) {
+      var picked = null, needAll = level >= 2, wantC = keyRole(5);
+      // Senior / Expert: one distractor per rule that breaks only that rule. With 5 options and 3 rules the key would then always be
+      // the centre of the options, so one rule (chosen at random) is tested only together with another one.
+      var needR = vary.length >= 3 ? shuffle(vary).slice(0, vary.length - 1) : vary;
+      for (var t2 = 0; t2 < 400 && !picked; t2++) {
         var sel;
         if (needAll) {
-          // Senior / Expert: one distractor per rule that breaks only that rule, so every rule is needed
-          var baseS = vary.map(function (a) { var s1 = poolO.filter(function (F) { return nd(F) === 1 && F[a] !== correct[a]; }); return s1.length ? pick(s1) : null; });
+          var baseS = needR.map(function (a) { var s1 = poolO.filter(function (F) { return nd(F) === 1 && F[a] !== correct[a]; }); return s1.length ? pick(s1) : null; });
           if (baseS.some(function (x) { return !x; })) break;
           sel = shuffle(baseS.concat(shuffle(poolO.filter(function (F) { return baseS.indexOf(F) < 0; })).slice(0, 4 - baseS.length)));
         } else sel = shuffle(poolO).slice(0, 4);
@@ -575,7 +585,7 @@ var ENGINE = (function () {
         if (dup || sel.length < 4) continue;
         if (!vary.every(function (a) { return sel.some(function (F) { return F[a] !== correct[a]; }); })) continue;
         if (sel.filter(function (F) { return nd(F) === 1; }).length < 1) continue;
-        if ((!needAll || t2 < 60) && keyStandsOut(correct, sel, present)) continue;
+        if (t2 < 380 && !centreOK(correct, sel, present, wantC, t2 > 200)) continue;
         picked = sel;
       }
       if (!picked) continue;
@@ -610,6 +620,27 @@ var ENGINE = (function () {
       var kc = c[key[a]]; return Object.keys(c).every(function (v) { return v === String(key[a]) || c[v] < kc; });
     });
   }
+  // Centre cue: a test-taker can pick the option most similar to all the others, or build an option from the most common value
+  // of each attribute. Before the options are chosen, keyRole(n) decides whether the key may be such a centre (probability 1/n);
+  // otherwise the option set must not single it out, so both guesses stay near chance.
+  function centreInfo(key, others, attrs) {
+    var all = [key].concat(others);
+    var sc = all.map(function (o) { var s = 0; attrs.forEach(function (a) { all.forEach(function (q) { if (q !== o && String(q[a]) === String(o[a])) s++; }); }); return s; });
+    var mx = Math.max.apply(null, sc);
+    var modal = attrs.every(function (a) { var c = {}; all.forEach(function (q) { c[q[a]] = (c[q[a]] || 0) + 1; }); var kc = c[key[a]]; return Object.keys(c).every(function (v) { return v === String(key[a]) || c[v] <= kc; }); }); // ties count: a vote that leaves a place open still fits the key
+    var mn = Math.min.apply(null, sc);
+    return { centre: sc[0] === mx, bottom: sc[0] === mn && mn < mx, top: sc.filter(function (s) { return s === mx; }).length, modal: modal };
+  }
+  // the key's place by similarity is drawn like that of a random option: most typical (1/n), least typical (1/n) or in between
+  function keyRole(n, f) { f = f || 1; var r = Math.random(); return r < f / n ? 'top' : r < (f + 1) / n ? 'bot' : 'mid'; } // f > 1 where the top is often shared by two options
+  // relax (second half of the tries): a role that cannot be met falls back to "anywhere but the top"
+  function centreOK(key, others, attrs, role, relax) {
+    var c = centreInfo(key, others, attrs);
+    if (role === 'top') return c.centre;
+    if (relax) return !c.centre && !c.modal;
+    if (role === 'bot') return c.bottom && !c.modal;
+    return !c.centre && !c.bottom && !c.modal;
+  }
   function diffNote(F, correct, attrs) {
     var d = attrs.filter(function (a) { return F[a] !== correct[a]; });
     return T(d.map(function (a) { return cap(L(ATTRN[a], 'ru')) + ': ' + L(valDesc(a, F[a]), 'ru') + ', а по правилу должно быть: ' + L(valDesc(a, correct[a]), 'ru'); }).join('; ') + '.',
@@ -617,7 +648,7 @@ var ENGINE = (function () {
   }
 
   /* ---------- Inductive: matrix ---------- */
-  function genMatrix(level, depth) {
+  function genMatrix(level, depth, nOpt) {
     var shapes = shuffle(['tri', 'sq', 'pent', 'hex', 'circ']).slice(0, 3);
     var vals = { shape: shapes, fill: shuffle([0, 1, 2]), count: shuffle([1, 2, 3]) };
     var pats = ['row', 'col', 'lat1', 'lat2'], P;
@@ -631,7 +662,7 @@ var ENGINE = (function () {
     var mr = level === 1 ? 2 : rnd(3), mc = level === 1 ? 2 : rnd(3);
     var correct = cell(mr, mc);
     var attrs = ['shape', 'fill', 'count'];
-    var need = level === 3 ? 7 : 5, chosen = null;
+    var need = nOpt ? nOpt - 1 : level >= 2 ? 7 : 5, chosen = null, wantC = keyRole(need + 1, 1.4);
     // balanced design: every value of every attribute appears about equally often among the options
     if (level >= 2) {
       // Senior / Expert: each attribute gets a distractor that breaks only it, so all three rules are needed
@@ -641,7 +672,7 @@ var ENGINE = (function () {
       for (var t3 = 0; t3 < 700 && !chosen; t3++) {
         var base = attrs.map(function (a) { return pick(allC.filter(function (C0) { return ndC(C0) === 1 && C0[a] !== correct[a]; })); });
         var rowsN = shuffle(base.concat(shuffle(allC.filter(function (C0) { return base.indexOf(C0) < 0; })).slice(0, need - 3)));
-        if (t3 < 350 && keyStandsOut(correct, rowsN, attrs)) continue;
+        if (t3 < 650 && !centreOK(correct, rowsN, attrs, wantC, t3 > 350)) continue;
         chosen = rowsN.map(function (C0) { return { C: C0, diffs: attrs.filter(function (a) { return C0[a] !== correct[a]; }) }; });
       }
     }
@@ -657,10 +688,10 @@ var ENGINE = (function () {
       for (var j = 0; j < need; j++) { var C = { shape: cols.shape[j], fill: cols.fill[j], count: cols.count[j] }, k = ckey(C); if (seen[k]) { okR = false; break; } seen[k] = 1; rows.push(C); }
       if (!okR) continue;
       var nSingle = rows.filter(function (C) { return attrs.filter(function (a) { return C[a] !== correct[a]; }).length === 1; }).length;
-      if (nSingle < (need === 5 ? 1 : 2) || keyStandsOut(correct, rows, attrs)) continue;
+      if (nSingle < (need === 5 ? 1 : 2) || (t2 < 580 && !centreOK(correct, rows, attrs, wantC, t2 > 300))) continue;
       chosen = rows.map(function (C) { return { C: C, diffs: attrs.filter(function (a) { return C[a] !== correct[a]; }) }; });
     }
-    if (!chosen) return (depth || 0) < 4 ? genMatrix(level, (depth || 0) + 1) : genSeries(level);
+    if (!chosen) return (depth || 0) < 4 ? genMatrix(level, (depth || 0) + 1, nOpt) : genSeries(level);
     var opts = shuffle([{ C: correct, ok: true }].concat(chosen));
     var ci = opts.findIndex(function (o) { return o.ok; });
     var vd = function (a, v, lang) { return a === 'count' ? String(v) : L(a === 'shape' ? SHN[v] : FILLN[v], lang); };
@@ -771,11 +802,11 @@ var ENGINE = (function () {
     return genOdd(level, (depth || 0) + 1);
   }
 
-  function genInductive(level, filter) {
+  function genInductive(level, filter, ext) {
     var types = filter && filter.length ? filter : ['series', 'series', 'matrix', 'odd', 'series', 'matrix'];
     var t = pick(types);
     if (t === 'series') return genSeries(level);
-    if (t === 'matrix') return genMatrix(level);
+    if (t === 'matrix') return genMatrix(level, 0, ext && ext.nOpt);
     return genOdd(level);
   }
 
@@ -783,6 +814,8 @@ var ENGINE = (function () {
   var PEOPLE = { ru: ['Алина', 'Борис', 'Вера', 'Глеб', 'Дина'], gen: ['Алины', 'Бориса', 'Веры', 'Глеба', 'Дины'], acc: ['Алину', 'Бориса', 'Веру', 'Глеба', 'Дину'], en: ['Alina', 'Boris', 'Vera', 'Gleb', 'Dina'] };
   var FIELDS = { ru: ['Ахтар', 'Белый Яр', 'Кедровое', 'Северный Купол', 'Таш-Кала'], en: ['Akhtar', 'Bely Yar', 'Kedrovoye', 'Severny Kupol', 'Tash-Kala'] };
   var ORD_EN = ['1st', '2nd', '3rd', '4th', '5th'];
+  var SUPPLIERS = { ru: ['Арсенал', 'Буревестник', 'Вектор-М', 'Гидромаш', 'Дельта'], en: ['Arsenal', 'Burevestnik', 'Vektor-M', 'Gidromash', 'Delta'] };
+  var WDAY = { ru: ['в понедельник', 'во вторник', 'в среду', 'в четверг', 'в пятницу'], en: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] };
   function perms(n) { var res = []; var a = []; for (var i = 0; i < n; i++) a.push(i); (function p(arr, k) { if (k === arr.length) { res.push(arr.slice()); return; } for (var i = k; i < arr.length; i++) { var t = arr[k]; arr[k] = arr[i]; arr[i] = t; p(arr, k + 1); t = arr[k]; arr[k] = arr[i]; arr[i] = t; } })(a, 0); return res; }
   var PERMS5 = perms(5); // order arrays: order[pos] = item
   function posOf(order) { var p = []; order.forEach(function (it, i) { p[it] = i; }); return p; }
@@ -797,6 +830,16 @@ var ENGINE = (function () {
   }
   function clueText(c, ctx) {
     var k = c.k + 1;
+    if (ctx === 'deliv') {
+      var S1 = '«' + SUPPLIERS.ru[c.x] + '»', S2 = c.y != null ? '«' + SUPPLIERS.ru[c.y] + '»' : '', S1e = SUPPLIERS.en[c.x], S2e = c.y != null ? SUPPLIERS.en[c.y] : '';
+      switch (c.t) {
+        case 'before': return T(S1 + ' привозит груз раньше, чем ' + S2 + '.', S1e + ' delivers earlier in the week than ' + S2e + '.');
+        case 'after1': return T(S1 + ' привозит груз на следующий день после того, как привозит ' + S2 + '.', S1e + ' delivers the day after ' + S2e + '.');
+        case 'notAdj': return T(S1 + ' и ' + S2 + ' привозят груз не в соседние дни.', S1e + ' and ' + S2e + ' do not deliver on consecutive days.');
+        case 'pos': return T(S1 + ' привозит груз ' + WDAY.ru[c.k] + '.', S1e + ' delivers on ' + WDAY.en[c.k] + '.');
+        case 'notPos': return T(S1 + ' привозит груз не ' + WDAY.ru[c.k] + '.', S1e + ' does not deliver on ' + WDAY.en[c.k] + '.');
+      }
+    }
     if (ctx === 'speak') {
       var X = PEOPLE.ru[c.x], Y = c.y != null ? PEOPLE.ru[c.y] : '', Yg = c.y != null ? PEOPLE.gen[c.y] : '', Xe = PEOPLE.en[c.x], Ye = c.y != null ? PEOPLE.en[c.y] : '';
       switch (c.t) {
@@ -1926,8 +1969,8 @@ var ENGINE = (function () {
     genDeductive: genDeductive, genOrder: genOrder, genSyllogism: genSyllogism,
     genNumerical: genNumerical, genVerbal: genVerbal, verbalPlan: verbalPlan, verbalItems: verbalItems,
     V: V, frameSvg: frameSvg, cellSvg: cellSvg, PERMS5: PERMS5, posOf: posOf, clueOk: clueOk, MODELS: MODELS, evalS: evalS,
-    fmtS: fmtS, cap: cap, keyStandsOut: keyStandsOut, numQ: numQ, nameQ: nameQ, tableHtml: tableHtml, barChart: barChart, shapeEl: shapeEl, qBox: qBox,
-    clueText: clueText, PEOPLE: PEOPLE, FIELDS: FIELDS, NUM_TAGS: NUM_TAGS, passageHtml: passageHtml, TFC: TFC, TFCI: TFCI, trapNote: trapNote, ANA_Q: ANA_Q, ANA_TIP: ANA_TIP,
+    fmtS: fmtS, cap: cap, keyStandsOut: keyStandsOut, centreInfo: centreInfo, centreOK: centreOK, keyRole: keyRole, numQ: numQ, nameQ: nameQ, tableHtml: tableHtml, barChart: barChart, shapeEl: shapeEl, qBox: qBox,
+    clueText: clueText, PEOPLE: PEOPLE, FIELDS: FIELDS, SUPPLIERS: SUPPLIERS, WDAY: WDAY, NUM_TAGS: NUM_TAGS, passageHtml: passageHtml, TFC: TFC, TFCI: TFCI, trapNote: trapNote, ANA_Q: ANA_Q, ANA_TIP: ANA_TIP,
     setNumMode: function (m) { NUM_MODE = m || 'choice'; }, getNumMode: function () { return NUM_MODE; }
   };
 })();
@@ -1946,8 +1989,8 @@ var ENGINE = (function () {
   // Balanced distractors: every option is a combination of correct / decoy values, and the key must not stand out from the options alone.
   // needAll (Senior / Expert): every tested attribute gets a distractor that breaks only that attribute,
   // so a solver who has found all rules but one is still left with at least two options.
-  // With 5–6 options this makes the key the most typical option on every attribute (unavoidable, as in real SHL / KF items);
-  // the "key must not stand out" check is then tried first and dropped only if it cannot be met.
+  // With 3+ rules and only 5–6 options the key would then always be the most typical option, so one rule is tested in a pair (see below);
+  // the centre check (E.centreOK) keeps "pick the most typical option" near chance.
   function balancedPick(correct, alts, attrs, nD, keyFn, minSingle, needAll) {
     var pool = [{}];
     attrs.forEach(function (a) {
@@ -1963,6 +2006,10 @@ var ENGINE = (function () {
     var tested = attrs.filter(function (a) { return (alts[a] || []).length; });
     var needList = Array.isArray(needAll) ? needAll.filter(function (a) { return tested.indexOf(a) >= 0; }) : tested;
     if (needAll && needList.length > nD) needAll = false;
+    // with k single-rule distractors the key cannot avoid being the centre of the option set unless there are at least 2k + 1
+    // distractors (checked exhaustively: 3 rules need 7, 4 rules need 9), so one rule (chosen at random) is tested only together with another one
+    if (needAll && needList.length >= 3 && nD < 2 * needList.length + 1) needList = shuffle(needList).slice(0, needList.length - 1);
+    var wantC = E.keyRole(nD + 1, 1.4);
     var singleOf = function (a) { return pool.filter(function (o) { return nd(o) === 1 && o[a] !== correct[a]; }); };
     for (var t = 0; t < 700; t++) {
       var sel;
@@ -1976,7 +2023,7 @@ var ENGINE = (function () {
       } else sel = shuffle(pool).slice(0, nD);
       if (!tested.every(function (a) { return sel.some(function (o) { return o[a] !== correct[a]; }); })) continue;
       if (sel.filter(function (o) { return nd(o) === 1; }).length < (minSingle == null ? 1 : minSingle)) continue;
-      if ((!needAll || t < 350) && E.keyStandsOut(correct, sel, attrs)) continue;
+      if (t < 650 && !E.centreOK(correct, sel, attrs, wantC, t > 350)) continue;
       return sel;
     }
     return null;
@@ -2123,7 +2170,7 @@ var ENGINE = (function () {
     if (C.mir) inner = '<g transform="translate(100,0) scale(-1,1)">' + inner + '</g>';
     return frameOpen() + '<g transform="rotate(' + (C.rot * 90) + ' 50 50)">' + inner + '</g></svg>';
   }
-  function genMatrixRot(level) {
+  function genMatrixRot(level, nOpt) {
     for (var tries = 0; tries < 200; tries++) {
       var kinds = shuffle(ROT_KIND), fills = shuffle([0, 1, 2]), step = level === 1 ? 1 : pick([1, 3]);
       var kP = level === 3 ? 'lat' : 'row', fP = level === 1 ? 'col' : pick(['col', 'lat']);
@@ -2133,9 +2180,9 @@ var ENGINE = (function () {
       if (mc === 0 && level < 3) mc = 1 + rnd(2);
       var correct = cell(mr, mc);
       if (!matrixUnique(cell, mr, mc, { kind: 0, rot: 4, fill: 0 }, correct)) continue;
-      var alts = { kind: [pick(kinds.filter(function (k) { return k !== correct.kind; }))], rot: shuffle([mod(correct.rot + 2, 4), mod(correct.rot + 1, 4), mod(correct.rot - 1, 4)]).slice(0, 2), fill: [pick([0, 1, 2].filter(function (f) { return f !== correct.fill; }))], mir: [true] };
+      nOpt = nOpt || (level >= 2 ? 8 : 6); var wide = nOpt > 6, alts = { kind: shuffle(kinds.filter(function (k) { return k !== correct.kind; })).slice(0, wide ? 2 : 1), rot: shuffle([mod(correct.rot + 2, 4), mod(correct.rot + 1, 4), mod(correct.rot - 1, 4)]).slice(0, wide ? 3 : 2), fill: shuffle([0, 1, 2].filter(function (f) { return f !== correct.fill; })).slice(0, wide ? 2 : 1), mir: [true] };
       var attrs = ['kind', 'rot', 'fill', 'mir'], key = function (C) { return attrs.map(function (a) { return C[a]; }).join('|'); };
-      var sel = balancedPick(correct, alts, attrs, 5, key, 2, level >= 2 ? ['kind', 'rot', 'fill'] : false);
+      var sel = balancedPick(correct, alts, attrs, nOpt - 1, key, 2, level >= 2 ? ['kind', 'rot', 'fill'] : false);
       if (!sel) continue;
       var O = optsFrom(correct, sel, rotSvg);
       var kindRule = kP === 'row' ? T('Вид фигуры одинаков в каждой строке.', 'The shape type is the same across each row.') : T('Каждый вид фигуры встречается один раз в каждой строке и каждом столбце.', 'Each shape type appears once in every row and every column.');
@@ -2176,7 +2223,8 @@ var ENGINE = (function () {
     });
     return s + '</svg>';
   }
-  function genArrowGrid(level) {
+  function genArrowGrid(level, nOpt) {
+    nOpt = nOpt || (level >= 2 ? 8 : 6);
     for (var tries = 0; tries < 200; tries++) {
       var rowMid = [rnd(4), rnd(4), rnd(4)], st = level === 1 ? 1 : pick([1, -1]), s0 = [rnd(4), rnd(4), rnd(4)];
       var latSet = shuffle([0, 1, 2, 3]).slice(0, 3), rP = level === 1 ? 'col' : 'lat', colR = shuffle([0, 1, 2, 3]).slice(0, 3);
@@ -2186,9 +2234,9 @@ var ENGINE = (function () {
       var mr = level === 1 ? 2 : rnd(3), mc = level === 1 ? 2 : 1 + rnd(2);
       var correct = cell(mr, mc), attrs = ['a0', 'a1', 'a2'], alts = {};
       if (!matrixUnique(cell, mr, mc, { a0: 4, a1: 4, a2: 4 }, correct)) continue;
-      attrs.forEach(function (a) { alts[a] = shuffle([mod(correct[a] + 2, 4), mod(correct[a] + 1, 4), mod(correct[a] - 1, 4)]).slice(0, 2); });
+      attrs.forEach(function (a) { alts[a] = shuffle([mod(correct[a] + 2, 4), mod(correct[a] + 1, 4), mod(correct[a] - 1, 4)]).slice(0, nOpt > 6 ? 3 : 2); });
       var key = function (C) { return C.a0 + '|' + C.a1 + '|' + C.a2; };
-      var sel = balancedPick(correct, alts, attrs, 5, key, 2, level >= 2);
+      var sel = balancedPick(correct, alts, attrs, nOpt - 1, key, 2, level >= 2);
       if (!sel) continue;
       var O = optsFrom(correct, sel, arrowsSvg);
       var rules = [
@@ -2414,11 +2462,12 @@ var ENGINE = (function () {
   E.genGridMove = genGridMove; E.genMatrixRot = genMatrixRot; E.genArrowGrid = genArrowGrid; E.genOverlay = genOverlay; E.genCount = genCount; E.genCode = genCode;
   E.balancedPick = balancedPick; E.IND_NEW = IND_NEW;
   var oldInd = E.genInductive;
-  E.genInductive = function (level, filter) {
+  // ext.nOpt: a longer answer list (Korn Ferry Elements Logical at Expert has up to 14 options); only these four types take it
+  E.genInductive = function (level, filter, ext) {
     var types = filter && filter.length ? filter : ['series', 'series', 'matrix', 'odd', 'grid', 'grid', 'rot', 'arrows', 'overlay', 'count', 'code'];
-    var t = pick(types);
-    if (IND_NEW[t]) return IND_NEW[t](level);
-    return oldInd(level, [t]);
+    var t = pick(types), nOpt = ext && ext.nOpt && ['rot', 'arrows', 'overlay', 'matrix'].indexOf(t) >= 0 ? ext.nOpt : null;
+    if (IND_NEW[t]) return nOpt ? IND_NEW[t](level, nOpt) : IND_NEW[t](level);
+    return oldInd(level, [t], nOpt ? { nOpt: nOpt } : null);
   };
 
 
@@ -3861,6 +3910,42 @@ var ENGINE = (function () {
   /* D5. If–then rules (Korn Ferry / Ecopsy deductive) */
   var PRJ = [T('Арктика', 'Arktika'), T('Бриз', 'Briz'), T('Восток', 'Vostok'), T('Гранит', 'Granit')];
   function pq(i, lang) { return lang === 'ru' ? '«' + PRJ[i].ru + '»' : PRJ[i].en; }
+  var IF_SK = {
+    trip: { ru: ['Алина', 'Борис', 'Вера', 'Глеб'], en: ['Alina', 'Boris', 'Vera', 'Gleb'], v: ['едет', 'едут', 'ехать'], ve: ['goes', 'go', 'go', 'does not go'], one: T('Едет ровно один человек.', 'Exactly one person goes.'), k: function (k) { return T('Едут ровно ' + k + ' человека.', 'Exactly ' + k + ' people go.'); }, none: T('никто', 'nobody'),
+      intro: T('Руководитель решает, кого из четырёх аналитиков — Алину, Бориса, Веру и Глеба — отправить в командировку в Абу-Даби. Возможно, что не поедет никто. Правила:', 'A manager decides which of four analysts — Alina, Boris, Vera and Gleb — to send on a business trip to Abu Dhabi. It is possible that nobody goes. The rules:'), set: T('Все варианты состава поездки, при которых выполнены правила:', 'Every possible group of travellers that satisfies the rules:') },
+    buy: { ru: ['насос', 'компрессор', 'генератор', 'сепаратор'], en: ['the pump', 'the compressor', 'the generator', 'the separator'], v: ['закупается', 'закупаются', 'закупаться'], ve: ['is bought', 'are bought', 'be bought', 'is not bought'], one: T('Закупается ровно одна позиция.', 'Exactly one item is bought.'), k: function (k) { return T('Закупаются ровно ' + k + ' позиции.', 'Exactly ' + k + ' items are bought.'); }, none: T('ничего', 'nothing'),
+      intro: T('Отдел закупок решает, что из четырёх позиций — насос, компрессор, генератор, сепаратор — закупить в этом квартале. Возможно, что не закупят ничего. Правила:', 'The procurement team decides which of four items — a pump, a compressor, a generator and a separator — to buy this quarter. It is possible that nothing is bought. The rules:'), set: T('Все варианты закупки, при которых выполнены правила:', 'Every possible purchase that satisfies the rules:') }
+  };
+  var capF = function (s) { return s.charAt(0).toUpperCase() + s.slice(1); };
+  function skName(sk, i, lang) { return sk ? IF_SK[sk][lang === 'ru' ? 'ru' : 'en'][i] : pq(i, lang); }
+  function ruleTextS(r, sk) {
+    if (!sk) return ruleText(r);
+    var S = IF_SK[sk], V = S.v[0], Vi = S.v[2], Vs = S.ve[0], Vb = S.ve[2], Vn = S.ve[3];
+    var X = skName(sk, r.x, 'ru'), Xe = skName(sk, r.x, 'en'), Y = r.y != null ? skName(sk, r.y, 'ru') : '', Ye = r.y != null ? skName(sk, r.y, 'en') : '';
+    switch (r.t) {
+      case 'imp': return T('Если ' + V + ' ' + X + ', то ' + V + ' и ' + Y + '.', 'If ' + Xe + ' ' + Vs + ', then ' + Ye + ' ' + Vs + ' too.');
+      case 'impN': return T('Если ' + V + ' ' + X + ', то ' + Y + ' не ' + V + '.', 'If ' + Xe + ' ' + Vs + ', then ' + Ye + ' ' + Vn + '.');
+      case 'nimp': return T('Если ' + X + ' не ' + V + ', то ' + V + ' ' + Y + '.', 'If ' + Xe + ' ' + Vn + ', then ' + Ye + ' ' + Vs + '.');
+      case 'notBoth': return T(capF(X) + ' и ' + Y + ' не могут ' + Vi + ' одновременно.', capF(Xe) + ' and ' + Ye + ' cannot both ' + Vb + '.');
+      case 'xor': return T('Из двух — ' + X + ' и ' + Y + ' — ' + V + ' ровно ' + (sk === 'trip' ? 'один человек' : 'одна позиция') + '.', 'Exactly one of ' + Xe + ' and ' + Ye + ' ' + Vs + '.');
+      case 'fact': return r.v ? T('Известно, что ' + X + ' ' + V + '.', 'It is known that ' + Xe + ' ' + Vs + '.') : T('Известно, что ' + X + ' не ' + V + '.', 'It is known that ' + Xe + ' ' + Vn + '.');
+    }
+  }
+  function stmTextS(s, sk) {
+    if (!sk) return stmText(s);
+    var S = IF_SK[sk], V = S.v[0], Vp = S.v[1], Vs = S.ve[0], Vpe = S.ve[1], Vn = S.ve[3];
+    var X = function (i, l) { return skName(sk, i, l); };
+    switch (s.t) {
+      case 'lit': return s.v ? T(capF(X(s.x, 'ru')) + ' ' + V + '.', capF(X(s.x, 'en')) + ' ' + Vs + '.') : T(capF(X(s.x, 'ru')) + ' не ' + V + '.', capF(X(s.x, 'en')) + ' ' + Vn + '.');
+      case 'both': return T(capF(Vp) + ' и ' + X(s.x, 'ru') + ', и ' + X(s.y, 'ru') + '.', 'Both ' + X(s.x, 'en') + ' and ' + X(s.y, 'en') + ' ' + Vpe + '.');
+      case 'neither': return T('Не ' + V + ' ни ' + X(s.x, 'ru') + ', ни ' + X(s.y, 'ru') + '.', 'Neither ' + X(s.x, 'en') + ' nor ' + X(s.y, 'en') + ' ' + Vs + '.');
+      case 'cnt': return s.k === 1 ? S.one : S.k(s.k);
+    }
+  }
+  function modelListS(models, lang, sk) {
+    if (!sk) return modelList(models, lang);
+    return models.map(function (m) { var f = [0, 1, 2, 3].filter(function (i) { return m[i]; }); return f.length ? f.map(function (i) { return skName(sk, i, lang); }).join(' + ') : L(IF_SK[sk].none, lang); });
+  }
   var M16 = []; for (var mm = 0; mm < 16; mm++) M16.push([0, 1, 2, 3].map(function (b) { return !!(mm & (1 << b)); }));
   function ruleOk(r, m) { var a = m[r.x], b = r.y != null ? m[r.y] : null; switch (r.t) { case 'imp': return !a || b; case 'impN': return !a || !b; case 'nimp': return a || b; case 'notBoth': return !(a && b); case 'xor': return a !== b; case 'fact': return a === r.v; } }
   function ruleText(r) {
@@ -3892,6 +3977,7 @@ var ENGINE = (function () {
     var key, rest;
     if (stem === 'must') { key = cls.filter(function (o) { return o.c === 'nec' && !o.ent; }); rest = cls.filter(function (o) { return o.c !== 'nec'; }); if (rest.filter(function (o) { return o.c === 'poss'; }).length < 2) return null; }
     else if (stem === 'cannot') { key = cls.filter(function (o) { return o.c === 'imp' && !o.ref; }); rest = cls.filter(function (o) { return o.c !== 'imp'; }); if (rest.filter(function (o) { return o.c === 'poss'; }).length < 2) return null; }
+    else if (stem === 'nfollow') { key = cls.filter(function (o) { return o.c === 'poss'; }); rest = cls.filter(function (o) { return o.c === 'nec'; }); rest = rest.filter(function (o) { return !o.ent; }); if (rest.length < 3) return null; if (rest.length < nOpt - 1) nOpt = 4; } // a restated condition would be a giveaway
     else { key = cls.filter(function (o) { return o.c === 'poss'; }); rest = cls.filter(function (o) { return o.c === 'imp'; }); }
     if (!key.length || rest.length < nOpt - 1) return null;
     var poss = shuffle(rest.filter(function (o) { return o.c === 'poss'; })), oth = shuffle(rest.filter(function (o) { return o.c !== 'poss'; }));
@@ -3899,15 +3985,30 @@ var ENGINE = (function () {
     if (stem === 'could') { var hard = shuffle(rest.filter(function (o) { return !o.ref; })); if (hard.length < 2) return null; dis = hard.slice(0, 2).concat(shuffle(rest.filter(function (o) { return hard.slice(0, 2).indexOf(o) < 0; }))).slice(0, nOpt - 1); }
     else dis = poss.slice(0, 2).concat(shuffle(poss.slice(2).concat(oth))).slice(0, nOpt - 1);
     var opts = shuffle([pick(key)].concat(dis));
+    // no two options may say the same thing or be exact opposites (over every possible arrangement, not just the admissible ones)
+    if (render.uni) {
+      for (var att = 0; att < 40; att++) {
+        var sg = opts.map(function (o) { return render.uni.map(function (m) { return render.ok(o.s, m) ? 1 : 0; }).join(''); });
+        var clash = sg.some(function (a, i) { return sg.some(function (b, j) { return j > i && (a === b || a === b.replace(/./g, function (ch) { return ch === '1' ? '0' : '1'; })); }); });
+        if (!clash) break;
+        if (att === 39) return null;
+        var kk = opts.filter(function (o) { return key.indexOf(o) >= 0; })[0], pool = rest.filter(function (o) { return o !== kk; });
+        if (stem === 'must' || stem === 'cannot') { var pp = shuffle(pool.filter(function (o) { return o.c === 'poss'; })), ot = shuffle(pool.filter(function (o) { return o.c !== 'poss'; })); dis = pp.slice(0, 2).concat(shuffle(pp.slice(2).concat(ot))).slice(0, nOpt - 1); }
+        else dis = shuffle(pool).slice(0, nOpt - 1);
+        kk = pick(key); opts = shuffle([kk].concat(dis));
+      }
+    }
     return { opts: opts, ci: opts.findIndex(function (o) { return key.indexOf(o) >= 0; }) };
   }
   var STEM = {
     must: T('Какое утверждение обязательно верно?', 'Which statement must be true?'),
     cannot: T('Какое утверждение точно неверно?', 'Which statement cannot be true?'),
-    could: T('Какое утверждение может быть верным?', 'Which statement could be true?')
+    could: T('Какое утверждение может быть верным?', 'Which statement could be true?'),
+    nfollow: T('Какое утверждение НЕ следует из условий обязательно (может оказаться и неверным)?', 'Which statement does NOT necessarily follow from the conditions (it may turn out false)?')
   };
   function mcNote(o, stem, models, ok, lang0) {
     var ex = function (want) { var m = models.filter(function (mm2) { return ok(o.s, mm2) === want; })[0]; return m; };
+    if (o.c === 'nec' && stem === 'nfollow') return T('Следует обязательно: это верно во всех вариантах, совместимых с условиями.', 'It does follow: it holds in every arrangement consistent with the conditions.');
     if (o.c === 'nec') return stem === 'must' ? T('Верно: выполняется во всех вариантах, совместимых с условиями.', 'Correct: it holds in every arrangement consistent with the conditions.') : stem === 'cannot' ? T('Это утверждение, наоборот, верно всегда.', 'On the contrary, this statement is always true.') : T('Верно: оно выполняется всегда, значит, и может быть верным.', 'Correct: it always holds, so it certainly could be true.');
     if (o.c === 'imp') return stem === 'cannot' ? T('Верно: ни один вариант, совместимый с условиями, этого не допускает.', 'Correct: no arrangement consistent with the conditions allows it.') : T('Невозможно: ни один вариант, совместимый с условиями, этого не допускает.', 'Impossible: no arrangement consistent with the conditions allows it.');
     return null;
@@ -3928,27 +4029,31 @@ var ENGINE = (function () {
       for (var a = 0; a < 4; a++) { st.push({ t: 'lit', x: a, v: true }); st.push({ t: 'lit', x: a, v: false }); for (var b = a + 1; b < 4; b++) { st.push({ t: 'both', x: a, y: b }); st.push({ t: 'neither', x: a, y: b }); } }
       if (level === 3) [1, 2, 3].forEach(function (kk) { st.push({ t: 'cnt', k: kk }); });
       st = st.filter(function (s) { return !rules.some(function (r) { return r.t === 'fact' && s.t === 'lit' && s.x === r.x; }); });
-      var stem = level === 1 ? pick(['must', 'must', 'cannot']) : pick(['must', 'cannot', 'could']);
+      var stem = level === 1 ? pick(['must', 'must', 'cannot']) : pick(['must', 'cannot', 'could', 'nfollow']);
       var single = function (s) { var ent = false, ref = false; rules.forEach(function (r) { var ms = M16.filter(function (m) { return ruleOk(r, m); }); if (ms.every(function (m) { return stmOk(s, m); })) ent = true; if (ms.every(function (m) { return !stmOk(s, m); })) ref = true; }); return { ent: ent, ref: ref }; };
-      var R = { ok: stmOk, single: single }, b2 = mcBuild(models, st, stem, R, 5);
+      var R = { ok: stmOk, single: single, uni: M16 }, b2 = mcBuild(models, st, stem, R, 5);
       if (!b2) continue;
-      var texts = rules.map(ruleText);
-      var opts = b2.opts;
+      var sk = pick([null, null, 'trip', 'buy']);
+      var texts = rules.map(function (r) { return ruleTextS(r, sk); });
+      var opts = b2.opts, otx = opts.map(function (o) { return stmTextS(o.s, sk); }), mlist = { ru: modelListS(models, 'ru', sk), en: modelListS(models, 'en', sk) };
+      var modelList = function (ms, lang) { return modelListS(ms, lang, sk); };
+      var intro = sk ? IF_SK[sk].intro : T('Инвесткомитет решает, какие из четырёх проектов — «Арктика», «Бриз», «Восток», «Гранит» — получат финансирование. Возможен и вариант, при котором не финансируется ни один проект. Правила:', 'The investment committee decides which of four projects — Arktika, Briz, Vostok and Granit — will be funded. It is possible that none is funded. The rules:');
+      var setHead = sk ? IF_SK[sk].set : T('Все наборы проектов, при которых выполнены правила:', 'Every set of funded projects that satisfies the rules:');
       return {
         mod: 'ded', type: 'ifthen', level: level, typeName: T('Если…, то…', 'If–then rules'),
         prompt: STEM[stem],
-        visual: function (lang) { return cluesHtml(T('Инвесткомитет решает, какие из четырёх проектов — «Арктика», «Бриз», «Восток», «Гранит» — получат финансирование. Возможен и вариант, при котором не финансируется ни один проект. Правила:', 'The investment committee decides which of four projects — Arktika, Briz, Vostok and Granit — will be funded. It is possible that none is funded. The rules:'), texts, lang); },
-        options: opts.map(function (o) { return { html: function (lang) { return esc(L(stmText(o.s), lang)); } }; }),
+        visual: function (lang) { return cluesHtml(intro, texts, lang); },
+        options: otx.map(function (t) { return { html: function (lang) { return esc(L(t, lang)); } }; }),
         correct: b2.ci,
         notes: opts.map(function (o) {
           var n0 = mcNote(o, stem, models, stmOk); if (n0) return n0;
           var yes = models.filter(function (m) { return stmOk(o.s, m); })[0], no = models.filter(function (m) { return !stmOk(o.s, m); })[0];
           if (stem === 'could') return T('Верно: это допускает, например, набор ' + modelList([yes], 'ru')[0] + '. Остальные утверждения невозможны ни при каком наборе.', 'Correct: the arrangement “' + modelList([yes], 'en')[0] + '” allows it, while no arrangement allows the others.');
-          return T('Возможно, но не обязательно: например, набор ' + modelList([yes], 'ru')[0] + ' это допускает, а набор ' + modelList([no], 'ru')[0] + ' — нет.', 'Possible but not certain: the arrangement “' + modelList([yes], 'en')[0] + '” allows it, while “' + modelList([no], 'en')[0] + '” does not.');
+          return T((stem === 'nfollow' ? 'Верно, это не следует обязательно. ' : '') + 'Возможно, но не обязательно: например, набор ' + modelList([yes], 'ru')[0] + ' это допускает, а набор ' + modelList([no], 'ru')[0] + ' — нет.', (stem === 'nfollow' ? 'Correct, it does not necessarily follow. ' : '') + 'Possible but not certain: the arrangement “' + modelList([yes], 'en')[0] + '” allows it, while “' + modelList([no], 'en')[0] + '” does not.');
         }),
-        solution: function (lang) { return '<p>' + esc(L(T('Все наборы проектов, при которых выполнены правила:', 'Every set of funded projects that satisfies the rules:'), lang)) + '</p><ul class="rules">' + modelList(models, lang).map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul><p class="muted">' + esc(L(T('«Если A, то B» не значит «если B, то A» и не говорит ничего о случае, когда A не финансируется. Зато из «не B» следует «не A».', '“If A then B” does not mean “if B then A”, and says nothing about the case where A is not funded. But “not B” does imply “not A”.'), lang)) + '</p>'; },
+        solution: function (lang) { return '<p>' + esc(L(setHead, lang)) + '</p><ul class="rules">' + mlist[lang === 'ru' ? 'ru' : 'en'].map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul><p class="muted">' + esc(L(T('«Если A, то B» не значит «если B, то A» и ничего не говорит о случае, когда A не выполняется. Зато из «не B» следует «не A».', '“If A then B” does not mean “if B then A”, and says nothing about the case where A does not happen. But “not B” does imply “not A”.'), lang)) + '</p>'; },
         tip: T('Начните с факта, если он дан, и протяните цепочку следствий. Помните два правила: из «если A, то B» и «B» ничего не следует про A; из «если A, то B» и «не B» следует «не A». Если цепочки не хватает — переберите варианты на черновике.', 'Start from the given fact, if there is one, and follow the chain of consequences. Remember: from “if A then B” and “B” nothing follows about A; from “if A then B” and “not B” it follows that “not A”. If the chain runs out, list the cases on scrap paper.'),
-        meta: { rules: rules, stem: stem, models: models.length, opts: opts.map(function (o) { return o.s; }) }
+        meta: { rules: rules, stem: stem, models: models.length, opts: opts.map(function (o) { return o.s; }), sk: sk }
       };
     }
     throw new Error('ifthen generator failed');
@@ -3968,24 +4073,25 @@ var ENGINE = (function () {
       if (cl.some(function (c, i) { var rest = cl.filter(function (_, j) { return j !== i; }); return PERMS5.filter(function (o) { var p = posOf(o); return rest.every(function (cc) { return clueOk(cc, p); }); }).length === sols.length; })) continue;
       var st = [];
       for (x = 0; x < 5; x++) { for (k = 0; k < 5; k++) st.push({ t: 'pos', x: x, k: k }); for (y = 0; y < 5; y++) if (x !== y) st.push({ t: 'before', x: x, y: y }); }
-      var models = sols.map(posOf), stem = pick(['must', 'could', 'cannot']);
+      var models = sols.map(posOf), stem = pick(level >= 2 ? ['must', 'could', 'cannot', 'nfollow'] : ['must', 'could', 'cannot']), ctx = pick(['speak', 'deliv']);
       var single = function (s) { var ent = false, ref = false; cl.forEach(function (c) { var ps = PERMS5.map(posOf).filter(function (p) { return clueOk(c, p); }); if (ps.every(function (p) { return clueOk(s, p); })) ent = true; if (ps.every(function (p) { return !clueOk(s, p); })) ref = true; }); return { ent: ent, ref: ref }; };
-      var b2 = mcBuild(models, st, stem, { ok: clueOk, single: single }, 5);
+      var b2 = mcBuild(models, st, stem, { ok: clueOk, single: single, uni: PERMS5.map(posOf) }, 5);
       if (!b2) continue;
-      var opts = b2.opts, texts = cl.map(function (c) { return clueText(c, 'speak'); });
-      var nameOrder = function (o, lang) { return o.map(function (i) { return lang === 'ru' ? PEOPLE.ru[i] : PEOPLE.en[i]; }).join(' → '); };
-      var stmTextO = function (s) { return clueText(s, 'speak'); };
+      var opts = b2.opts, texts = cl.map(function (c) { return clueText(c, ctx); });
+      var NMO = ctx === 'deliv' ? E.SUPPLIERS : PEOPLE;
+      var nameOrder = function (o, lang) { return o.map(function (i) { return lang === 'ru' ? NMO.ru[i] : NMO.en[i]; }).join(' → '); };
+      var stmTextO = function (s) { return clueText(s, ctx); };
       return {
         mod: 'ded', type: 'ordmc', level: level, typeName: T('Может / должно / не может', 'Must / could / cannot'),
         prompt: STEM[stem],
-        visual: function (lang) { return cluesHtml(T('Пять менеджеров по очереди представляют проекты на инвесткомитете (слоты №1–5). Условия не задают порядок однозначно. Известно:', 'Five managers present projects to the investment committee one after another (slots 1–5). The conditions do not fix a single order. The following is known:'), texts, lang); },
+        visual: function (lang) { return cluesHtml(ctx === 'deliv' ? T('Пять поставщиков привозят оборудование на склад с понедельника по пятницу, каждый — в свой день. Условия не задают порядок однозначно. Известно:', 'Five suppliers deliver equipment to a warehouse from Monday to Friday, each on a different day. The conditions do not fix a single order. The following is known:') : T('Пять менеджеров по очереди представляют проекты на инвесткомитете (слоты №1–5). Условия не задают порядок однозначно. Известно:', 'Five managers present projects to the investment committee one after another (slots 1–5). The conditions do not fix a single order. The following is known:'), texts, lang); },
         options: opts.map(function (o) { return { html: function (lang) { return esc(L(stmTextO(o.s), lang)); } }; }),
         correct: b2.ci,
         notes: opts.map(function (o) {
           var n0 = mcNote(o, stem, models, clueOk); if (n0) return n0;
           var yes = sols.filter(function (s) { return clueOk(o.s, posOf(s)); })[0], no = sols.filter(function (s) { return !clueOk(o.s, posOf(s)); })[0];
           if (stem === 'could') return T('Верно: это допускает, например, порядок ' + nameOrder(yes, 'ru') + '. Остальные утверждения невозможны ни при каком порядке.', 'Correct: the order ' + nameOrder(yes, 'en') + ' allows it, while no valid order allows the others.');
-          return T('Возможно, но не обязательно: порядок ' + nameOrder(yes, 'ru') + ' это допускает, а ' + nameOrder(no, 'ru') + ' — нет.', 'Possible but not certain: the order ' + nameOrder(yes, 'en') + ' allows it, but ' + nameOrder(no, 'en') + ' does not.');
+          return T((stem === 'nfollow' ? 'Верно, это не следует обязательно. ' : '') + 'Возможно, но не обязательно: порядок ' + nameOrder(yes, 'ru') + ' это допускает, а ' + nameOrder(no, 'ru') + ' — нет.', (stem === 'nfollow' ? 'Correct, it does not necessarily follow. ' : '') + 'Possible but not certain: the order ' + nameOrder(yes, 'en') + ' allows it, but ' + nameOrder(no, 'en') + ' does not.');
         }),
         solution: function (lang) { return '<p>' + esc(L(T('Все порядки, совместимые с условиями:', 'Every order consistent with the conditions:'), lang)) + '</p><ol class="sol-order">' + sols.map(function (s) { return '<li>' + esc(nameOrder(s, lang)) + '</li>'; }).join('') + '</ol>'; },
         tip: T('Здесь порядок не единственный, поэтому важно точно прочитать вопрос. «Обязательно» — верно во всех вариантах; «может быть» — хотя бы в одном; «точно неверно» — ни в одном. Выпишите 2–3 допустимых порядка и проверяйте варианты по ним.', 'Here the order is not unique, so read the stem carefully. “Must” — true in every arrangement; “could” — in at least one; “cannot” — in none. Write out 2–3 valid orders and test the options against them.'),
@@ -4015,13 +4121,98 @@ var ENGINE = (function () {
     });
   }
 
-  var DED_NEW = { rooms: genRooms, slot: genFreeSlot, tasks: genTasks, cal: genCalendar, ifthen: genIfThen, ordmc: genOrderMC, rank: genRank };
+  /* D8. SHL Interactive Deductive “where is everyone at 14:30”: place each person in a room from schedules and location rules */
+  var WROOMS = [T('Рабочее место', 'Desk'), T('Переговорная', 'Meeting room'), T('Конференц-зал', 'Conference room'), T('Столовая', 'Dining area'), T('Балкон', 'Balcony')];
+  var WACT = { call: [T('звонок', 'phone call'), 2], meet: [T('встреча', 'meeting'), 1], lunch: [T('обед', 'lunch'), 3], brk: [T('перерыв', 'break'), 4] };
+  var hmW = function (m) { var h = Math.floor(m / 60), mi = m % 60; return h + ':' + (mi < 10 ? '0' : '') + mi; };
+  function genWhere(level) {
+    var nP = level === 1 ? 4 : 5;
+    for (var tries = 0; tries < 20000; tries++) {
+      var Tm = (10 + rnd(7)) * 60 + pick([0, 30]), people = shuffle([0, 1, 2, 3, 4, 5]).slice(0, nP), longCall = level === 3, sch = [], ok = true;
+      people.forEach(function (who) {
+        var items = [], busy = function (s, e) { return items.some(function (a) { return s < a.e && a.s < e; }); };
+        var ls = pick([720, 750, 780, 810]); items.push({ k: 'lunch', s: ls, e: ls + 60 });
+        var nX = 1 + rnd(2);
+        for (var z = 0; z < 12 && items.length < 1 + nX; z++) {
+          var k = pick(['call', 'call', 'meet', 'meet', 'brk']), d = k === 'brk' ? 15 : k === 'call' ? pick([30, 45, 60, 90]) : pick([60, 90]);
+          var s = (9 * 60) + 15 * rnd(32); if (s + d > 17 * 60 || busy(s, s + d)) continue;
+          items.push({ k: k, s: s, e: s + d });
+        }
+        items.sort(function (a, b) { return a.s - b.s; });
+        sch.push({ who: who, items: items });
+      });
+      // presentation twists: an end exactly at T, a start exactly at T, an activity given relative to the previous one, a moved meeting
+      var twists = [];
+      sch.forEach(function (p, pi) { p.items.forEach(function (a, ai) { a.rel = false; a.moved = 0; }); });
+      if (level >= 2) {
+        var movable = function (a) { return a.k !== 'lunch' || (Tm >= 750 && Tm <= 870); };
+        var p1 = pick(sch), c1 = p1.items.filter(movable); if (!c1.length) continue; var a1 = pick(c1); var d1 = a1.e - a1.s; a1.e = Tm; a1.s = Tm - d1;
+        var p2 = pick(sch.filter(function (p) { return p !== p1; })), c2 = p2.items.filter(movable); if (!c2.length) continue; var a2 = pick(c2); var d2 = a2.e - a2.s; a2.s = Tm; a2.e = Tm + d2;
+        twists.push('end', 'start');
+        var p3 = pick(sch); var idx = p3.items.length > 1 ? 1 + rnd(p3.items.length - 1) : -1;
+        if (idx > 0 && p3.items[idx].k !== 'lunch') { var pr = p3.items[idx - 1], cur = p3.items[idx]; var dd = cur.e - cur.s; cur.s = pr.e; cur.e = pr.e + dd; cur.rel = true; }
+      }
+      if (level === 3) { var pm = pick(sch), mts = pm.items.filter(function (a, ai) { return (a.k === 'meet' || a.k === 'call') && !a.rel && !(pm.items[ai + 1] && pm.items[ai + 1].rel); }); if (mts.length) { var mv = pick(mts); mv.moved = pick([30, 60, -30, -60]); } }
+      // list each schedule in time order; a relative item must still follow the item it refers to
+      sch.forEach(function (p) { p.items.sort(function (x, y) { return x.s - y.s; }); p.items.forEach(function (a, ai) { if (a.rel && (!ai || p.items[ai - 1].e !== a.s || p.items[ai - 1].moved)) ok = false; }); });
+      // validity: no overlaps after the twists, everything within 9:00–17:30
+      sch.forEach(function (p) { var its = p.items.map(function (a) { return { s: a.s + a.moved, e: a.e + a.moved }; }).sort(function (x, y) { return x.s - y.s; }); for (var q2 = 0; q2 < its.length; q2++) { if (its[q2].s < 540 || its[q2].e > 1050) ok = false; if (q2 && its[q2].s < its[q2 - 1].e) ok = false; } });
+      if (!ok) continue;
+      var roomOf = function (a) { if (a.k === 'call' && longCall && a.e - a.s > 45) return 1; return WACT[a.k][1]; };
+      var ans = sch.map(function (p) { var act = p.items.filter(function (a) { return a.s + a.moved <= Tm && Tm < a.e + a.moved; })[0]; return act ? roomOf(act) : 0; });
+      var naive = sch.map(function (p) { var act = p.items.filter(function (a) { return a.s <= Tm && Tm <= a.e; })[0]; return act ? WACT[act.k][1] : 0; });
+      if (new Set(ans).size < (level === 1 ? 3 : 4) || ans.indexOf(0) < 0) continue;
+      if (level >= 2 && naive.every(function (v, i) { return v === ans[i]; })) continue; // at least one trap must bite a careless reader
+      if (level === 3 && !sch.some(function (p) { return p.items.some(function (a) { return a.moved && a.s + a.moved <= Tm + 60 && Tm - 60 < a.e + a.moved; }); })) continue;
+      if (level === 3 && !sch.some(function (p) { return p.items.some(function (a) { return a.k === 'call' && a.e - a.s > 45 && a.s + a.moved <= Tm && Tm < a.e + a.moved; }); }) && Math.random() < 0.7) continue;
+      var rules = [T('Если по расписанию ничего нет, сотрудник на рабочем месте.', 'With nothing scheduled, a person is at their desk.'), T('Встречи проходят в переговорной.', 'Meetings take place in the meeting room.'), T('Звонки проводят в конференц-зале.', 'Phone calls are made in the conference room.'), T('Обедают в столовой.', 'Lunch is eaten in the dining area.'), T('Перерывы проводят на балконе.', 'Breaks are taken on the balcony.'), T('Время окончания в занятие не входит: если звонок идёт до ' + hmW(Tm) + ', то в ' + hmW(Tm) + ' он уже закончен.', 'The end time is not part of an activity: a call that runs until ' + hmW(Tm) + ' is over at ' + hmW(Tm) + '.')];
+      if (longCall) rules.splice(3, 0, T('Исключение: звонки дольше 45 минут проводят в переговорной.', 'Exception: calls longer than 45 minutes are made in the meeting room.'));
+      var itemText = function (a, prev, lang) {
+        var nm = L(WACT[a.k][0], lang);
+        var base0 = a.rel ? (lang === 'ru' ? nm + ' ' + (a.e - a.s) + ' мин сразу после предыдущего занятия' : nm + ', ' + (a.e - a.s) + ' min, straight after the previous item') : hmW(a.s) + '–' + hmW(a.e) + ' ' + nm;
+        if (a.moved) base0 += lang === 'ru' ? ' (перенесена на ' + Math.abs(a.moved) + ' мин ' + (a.moved > 0 ? 'позже' : 'раньше') + ')' : ' (moved ' + Math.abs(a.moved) + ' min ' + (a.moved > 0 ? 'later' : 'earlier') + ')';
+        return base0;
+      };
+      if (sch.some(function (p) { return p.items.some(function (a) { return a.moved && a.k === 'call'; }); })) { /* wording: «перенесён» for a call */ }
+      var schText = function (p, lang) { return p.items.map(function (a, i) { var t0 = itemText(a, p.items[i - 1], lang); if (lang === 'ru' && a.moved && a.k === 'call') t0 = t0.replace('перенесена', 'перенесён'); if (lang === 'ru' && a.moved && a.k === 'brk') t0 = t0.replace('перенесена', 'перенесён'); return t0; }).join('; '); };
+      var vis = function (lang) {
+        var tbl = '<div class="tbl-wrap"><table class="dt wrap"><caption>' + esc(L(T('Расписание на сегодня', 'Today’s schedule'), lang)) + '</caption><thead><tr><th>' + esc(L(T('Сотрудник', 'Person'), lang)) + '</th><th>' + esc(L(T('Занятия', 'Activities'), lang)) + '</th></tr></thead><tbody>' +
+          sch.map(function (p) { return '<tr><th scope="row">' + esc(pn(p.who, lang)) + '</th><td>' + esc(schText(p, lang)) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+        return cluesHtml(T('Правила офиса:', 'Office rules:'), rules, lang, tbl);
+      };
+      var why = function (p, i, lang) {
+        var act = p.items.filter(function (a) { return a.s + a.moved <= Tm && Tm < a.e + a.moved; })[0];
+        if (!act) return L(T('в ' + hmW(Tm) + ' ничего не запланировано', 'nothing is scheduled at ' + hmW(Tm)), lang) + ' → ' + L(WROOMS[0], lang);
+        var tt = hmW(act.s + act.moved) + '–' + hmW(act.e + act.moved);
+        var ex = act.k === 'call' && longCall && act.e - act.s > 45 ? L(T(' (дольше 45 мин — исключение)', ' (over 45 min — the exception)'), lang) : '';
+        return L(WACT[act.k][0], lang) + ' ' + tt + ex + ' → ' + L(WROOMS[ans[i]], lang);
+      };
+      var check = function (sel) {
+        var bad = [];
+        sch.forEach(function (p, i) { if (sel[i] != null && sel[i] !== ans[i]) bad.push(T(pn(p.who, 'ru') + ': ' + why(p, i, 'ru') + '.', pn(p.who, 'en') + ': ' + why(p, i, 'en') + '.')); });
+        return bad;
+      };
+      return {
+        mod: 'ded', type: 'where', level: level, typeName: T('Где сотрудник в ' + hmW(Tm), 'Who is where at ' + hmW(Tm)),
+        prompt: T('Где находится каждый сотрудник в ' + hmW(Tm) + '?', 'Where is each person at ' + hmW(Tm) + '?'),
+        visual: vis, mode: 'assign', options: [], notes: [], correct: null,
+        assign: { rows: sch.map(function (p) { return function (lang) { return esc(pn(p.who, lang)); }; }), cols: WROOMS.map(function (r) { return function (lang) { return esc(L(r, lang)); }; }), answer: ans.slice(), cap: nP },
+        check: check,
+        solution: function (lang) { return '<ul class="rules">' + sch.map(function (p, i) { return '<li><b>' + esc(pn(p.who, lang)) + '</b>: ' + esc(why(p, i, lang)) + '</li>'; }).join('') + '</ul>'; },
+        tip: T('Идите по людям, а не по комнатам: для каждого найдите занятие, которое идёт ровно в ' + hmW(Tm) + '. Занятие, которое в это время заканчивается, уже не идёт, а то, что начинается, — уже идёт. Относительное время («сразу после…») и переносы сначала переведите в часы.', 'Go person by person, not room by room: for each, find the activity running at exactly ' + hmW(Tm) + '. One that ends at that time is over; one that starts then is already running. Convert relative times (“straight after…”) and moved items into clock times first.'),
+        meta: { T: Tm, ans: ans, sch: sch, longCall: longCall }
+      };
+    }
+    throw new Error('where generator failed');
+  }
+
+  var DED_NEW = { rooms: genRooms, slot: genFreeSlot, tasks: genTasks, cal: genCalendar, ifthen: genIfThen, ordmc: genOrderMC, rank: genRank, where: genWhere };
   E.DED_NEW = DED_NEW;
   var oldDed = E.genDeductive;
   // opt: { interactive: true } → rooms in assign mode, tasks with typed answers
   E.genDeductive = function (level, filter, opt) {
     opt = opt || {};
-    var types = filter && filter.length ? filter : ['order', 'syll', 'rooms', 'slot', 'tasks', 'cal', 'ifthen', 'ordmc', 'rank'];
+    var types = filter && filter.length ? filter : ['order', 'syll', 'rooms', 'slot', 'tasks', 'cal', 'ifthen', 'ordmc', 'rank', 'where'];
     var t = pick(types);
     if (t === 'rooms') return genRooms(level, { assign: opt.interactive != null ? opt.interactive : Math.random() < 0.5 });
     if (t === 'tasks') return genTasks(level, { input: !!opt.interactive && Math.random() < 0.5 });
@@ -4425,6 +4616,9 @@ var ENGINE = (function () {
           alts[a] = shuffle(seen.filter(function (x, i, arr) { return arr.indexOf(x) === i; })).concat(shuffle(pool)).filter(function (x, i, arr) { return arr.indexOf(x) === i; }).slice(0, 2);
         } else alts[a] = level === 3 ? [pick(pool)] : [];
       });
+      // Basic: two rules give only 8 combinations for 7 distractors, so the set is nearly fixed and the key's place in it is predictable;
+      // one constant element also gets a decoy value
+      if (level === 1) { var ca = pick(attrs.filter(function (a) { return vary.indexOf(a) < 0 && a !== 'hand'; })); var cp = (ca === 'n' ? [1, 2, 3] : [0, 1, 2, 3].slice(0, NV[ca])).filter(function (x) { return x !== correct[ca]; }); alts[ca] = [pick(cp)]; }
       var key = function (C) { return attrs.map(function (a) { return C[a]; }).join('|'); };
       var sel = balancedPick(correct, alts, attrs, 7, key, 2, level >= 2 ? vary : false);
       if (!sel) continue;
@@ -4588,8 +4782,8 @@ var ENGINE = (function () {
         if ([0, 1].some(function (i2) { return grid[i2][0].a === grid[i2][1].a; })) continue;
         correct = grid[2][2]; attrs = two ? ['a', 'b'] : ['a'];
         var A1 = grid[2][0].a, A2 = grid[2][1].a;
-        alts.a = [otherA(A1, A2), correct.a + 1, correct.a - 1].concat(two ? [] : [1, 2, 3, 4, 5, 6, 7, 8]).filter(function (x, k, arr) { return x >= 1 && x <= 8 && x !== correct.a && arr.indexOf(x) === k; }).slice(0, two ? 2 : 7);
-        if (two) { var B1 = grid[2][0].b, B2 = grid[2][1].b, otherB = opB === '+' ? B1 - B2 : B1 + B2; alts.b = [otherB, correct.b + 1, correct.b - 1].filter(function (x, k, arr) { return x >= 1 && x <= 7 && x !== correct.b && arr.indexOf(x) === k; }).slice(0, 2); }
+        alts.a = [otherA(A1, A2), correct.a + 1, correct.a - 1].concat(two ? [correct.a + 2, correct.a - 2] : [1, 2, 3, 4, 5, 6, 7, 8]).filter(function (x, k, arr) { return x >= 1 && x <= 8 && x !== correct.a && arr.indexOf(x) === k; }).slice(0, two ? 3 : 7);
+        if (two) { var B1 = grid[2][0].b, B2 = grid[2][1].b, otherB = opB === '+' ? B1 - B2 : B1 + B2; alts.b = [otherB, correct.b + 1, correct.b - 1, correct.b + 2, correct.b - 2].filter(function (x, k, arr) { return x >= 1 && x <= 7 && x !== correct.b && arr.indexOf(x) === k; }).slice(0, 3); } // 3 decoys each: 2 × 2 left the option set nearly fixed
         render = roCountSvg; key = function (C) { return C.a + '|' + C.b; };
         var dirW = byCol ? T('в каждом столбце: число в нижней клетке', 'in each column: the number in the bottom cell') : T('в каждой строке: число в третьей клетке', 'in each row: the number in the third cell');
         rules.push(T('Чёрные точки — ' + dirW.ru + (opA === '+' ? ' равно сумме двух первых.' : ' равно разности первой и второй.'), 'Black dots — ' + dirW.en + (opA === '+' ? ' equals the sum of the first two.' : ' equals the first minus the second.')));
@@ -4608,8 +4802,9 @@ var ENGINE = (function () {
         correct = grid[2][2]; attrs = ctr ? ['m', 'c'] : ['m'];
         var M1 = grid[2][0].m, M2 = grid[2][1].m, mAlt = [];
         Object.keys(RO_OPS).forEach(function (k) { var v = RO_OPS[k].f(M1, M2); if (v !== correct.m && bits(v) && mAlt.indexOf(v) < 0) mAlt.push(v); });
-        var nM = ctr ? 4 : 7;
-        shuffle([0, 1, 2, 3, 4, 5, 6, 7]).forEach(function (b) { var v = correct.m ^ (1 << b); if (bits(v) && mAlt.indexOf(v) < 0 && mAlt.length < nM) mAlt.push(v); });
+        var nM = ctr ? 8 : 12; // more decoys than places, so the option set can be chosen against a line-by-line majority vote
+        var nK = mAlt.length + 3; // only three one-symbol slips of the key: more of them would make the key the hub of the option set
+        shuffle([0, 1, 2, 3, 4, 5, 6, 7]).forEach(function (b) { var v = correct.m ^ (1 << b); if (bits(v) && mAlt.indexOf(v) < 0 && mAlt.length < Math.min(nM, nK)) mAlt.push(v); });
         mAlt.slice().forEach(function (v0) { shuffle([0, 1, 2, 3, 4, 5, 6, 7]).forEach(function (b) { var v = v0 ^ (1 << b); if (bits(v) && v !== correct.m && mAlt.indexOf(v) < 0 && mAlt.length < nM) mAlt.push(v); }); });
         alts.m = mAlt.slice(0, nM);
         if (ctr) { var cs = [grid[2][0].c, grid[2][1].c, grid[0][2].c, grid[1][2].c].filter(function (x) { return x !== correct.c; }); alts.c = cs.filter(function (x, k, arr) { return arr.indexOf(x) === k; }).slice(0, 1); if (!alts.c.length) continue; }
@@ -4620,6 +4815,14 @@ var ENGINE = (function () {
       }
       if (byCol) { var g2 = [[], [], []]; for (var r1 = 0; r1 < 3; r1++) for (var c1 = 0; c1 < 3; c1++) g2[c1][r1] = grid[r1][c1]; grid = g2; }
       var sel = balancedPick(correct, alts, attrs, 7, key, 2, level >= 2);
+      if (sel && mode === 'set') {
+        // symbols are compared place by place, so the centre check runs on single symbols: neither "the most typical option"
+        // nor a place-by-place majority vote may point to the key more often than chance
+        var bitV = function (C) { var o = {}; for (var b8 = 0; b8 < 8; b8++) o['b' + b8] = (C.m >> b8) & 1; if (C.c != null) o.c = C.c; return o; };
+        var BA = Object.keys(bitV(correct)), role = E.keyRole(8, 1.4), best = null;
+        for (var t5 = 0; t5 < 300 && !best && sel; t5++) { if (t5 > 280 || E.centreOK(bitV(correct), sel.map(bitV), BA, role, t5 > 150)) best = sel; else sel = balancedPick(correct, alts, attrs, 7, key, 2, level >= 2); }
+        sel = best;
+      }
       if (!sel) continue;
       var O = optsFrom(correct, sel, render), G = grid;
       return {
@@ -4914,6 +5117,149 @@ var ENGINE = (function () {
     ['Временным работникам платят меньше, чем постоянным.', 'C', 'Об оплате в тексте ничего не сказано.']], [
     ['В декабре прошлого года на складе работали больше 350 временных работников.', 'T', '40% от 1000 — это 400.'],
     ['Новое предложение договоров снизит текучесть персонала.', 'C', 'Прогноза эффекта в тексте нет.']]);
+
+  /* ---- v29: more texts outside oil & gas (target: about 40% of verbal items in every format and language) ---- */
+  PG('ru', 'Абонемент в фитнес-клуб', 'Сеть фитнес-клубов «Импульс» с 1 февраля продаёт годовой абонемент за 36 000 рублей вместо 30 000. Владелец абонемента может один раз в год заморозить его на срок до 30 дней; при болезни, подтверждённой справкой, срок заморозки продлевается ещё на 30 дней. Групповые занятия входят в абонемент, персональные тренировки оплачиваются отдельно. В прошлом году 45% владельцев годовых абонементов посещали клуб реже одного раза в неделю.', [
+    ['Годовой абонемент подорожал на 20%.', 'T', 'Рост на 6 000 рублей от 30 000 — это 20%.'],
+    ['Без справки о болезни абонемент можно заморозить на 60 дней.', 'F', 'Без справки — не больше 30 дней; ещё 30 дней добавляются только при болезни со справкой.'],
+    ['Персональные тренировки входят в стоимость годового абонемента.', 'F', 'Персональные тренировки оплачиваются отдельно.'],
+    ['После подорожания часть клиентов перейдёт в другие сети.', 'C', 'О реакции клиентов на новую цену в тексте ничего нет.']], [
+    ['В прошлом году больше половины владельцев годовых абонементов ходили в клуб не реже раза в неделю.', 'T', 'Реже раза в неделю ходили 45%, значит, не реже — 55%.'],
+    ['Групповые занятия популярнее персональных тренировок.', 'C', 'Популярность занятий в тексте не сравнивается.']]);
+  PG('ru', 'Тарифы каршеринга', 'Сервис каршеринга «Городок» берёт 12 рублей за минуту поездки. С марта действует суточный тариф: 2 900 рублей за 24 часа, в которые входит 200 км пробега; каждый следующий километр стоит 15 рублей. Топливо входит в оба тарифа. Если оставить автомобиль за пределами зоны завершения аренды, списывается штраф 5 000 рублей. По данным сервиса, средняя поездка по поминутному тарифу длится 27 минут.', [
+    ['Средняя поездка по поминутному тарифу стоит меньше 350 рублей.', 'T', '27 минут × 12 рублей = 324 рубля.'],
+    ['По суточному тарифу клиент оплачивает топливо отдельно.', 'F', 'Топливо входит в оба тарифа.'],
+    ['Суточный тариф выбирают в основном для поездок за город.', 'C', 'О целях поездок по суточному тарифу в тексте ничего нет.'],
+    ['По суточному тарифу сутки с пробегом 250 км стоят 3 650 рублей.', 'T', '2 900 + 50 км × 15 рублей = 3 650 рублей.']], [
+    ['Четырёхчасовая поездка по поминутному тарифу обойдётся дороже суточного тарифа.', 'F', '240 минут × 12 рублей = 2 880 рублей — это меньше 2 900.'],
+    ['За автомобиль, оставленный вне зоны завершения аренды, списывают 5 000 рублей.', 'T', 'Прямо сказано в тексте.']]);
+  PG('ru', 'Бесплатные среды в музее', 'Городской музей истории с апреля открыт бесплатно по средам с 15:00 до 21:00. В остальные дни билет стоит 500 рублей, для студентов и пенсионеров — 250 рублей. За первые три месяца посещаемость по средам выросла в 2,5 раза, а общая посещаемость музея — на 18%. Выручка от продажи билетов за тот же период снизилась на 6%. Экскурсии с гидом платные во все дни, включая среду.', [
+    ['Выручка от продажи билетов за первые три месяца выросла.', 'F', 'Выручка снизилась на 6%.'],
+    ['В среду вечером экскурсия с гидом бесплатна.', 'F', 'Экскурсии платные во все дни, включая среду.'],
+    ['Бесплатные среды привлекли в основном тех, кто раньше не бывал в музее.', 'C', 'О том, кто эти посетители, в тексте ничего нет.'],
+    ['Студент, пришедший в четверг, заплатит за билет 250 рублей.', 'T', 'Четверг — обычный день, а студенческий билет стоит 250 рублей.']], [
+    ['Общая посещаемость музея за три месяца выросла меньше чем на пятую часть.', 'T', '18% меньше 20%.'],
+    ['Музей собирается сделать бесплатными и другие дни.', 'C', 'О таких планах в тексте ничего нет.']]);
+  PG('ru', 'Наборы выпечки со скидкой', 'Сеть пекарен «Хлебный двор» с прошлой осени продаёт непроданную за день выпечку через мобильное приложение: за час до закрытия набор из нескольких изделий стоит 30% от обычной цены. Приложение подключено в 38 из 52 пекарен сети. По оценке компании, за год объём списанной продукции в этих 38 пекарнях сократился на 40%. Состав набора нельзя выбрать заранее: покупатель узнаёт его только при получении.', [
+    ['Приложение подключено больше чем в двух третях пекарен сети.', 'T', '38 из 52 — около 73%, это больше двух третей (66,7%).'],
+    ['Покупатель платит за набор 70% от обычной цены.', 'F', 'Набор стоит 30% от обычной цены.'],
+    ['Покупатель может заранее выбрать изделия в наборе.', 'F', 'Состав набора покупатель узнаёт только при получении.'],
+    ['Прибыль пекарен, подключённых к приложению, выросла.', 'C', 'О прибыли в тексте ничего нет — только о списаниях.']], [
+    ['Пекарни без приложения тоже сократили списания.', 'C', 'Данные о списаниях приведены только по 38 пекарням с приложением.'],
+    ['Наборы продаются за час до закрытия пекарни.', 'T', 'Прямо сказано в тексте.']]);
+  PG('ru', 'Кешбэк по карте', 'Банк «Каскад» начисляет по дебетовой карте кешбэк 5% в трёх категориях, которые клиент выбирает в начале месяца, и 1% на остальные покупки. Сумма кешбэка за месяц не может превышать 3 000 рублей. Кешбэк не начисляется на оплату коммунальных услуг и на переводы. Обслуживание карты бесплатное, если сумма покупок за месяц не меньше 10 000 рублей; иначе оно стоит 99 рублей в месяц.', [
+    ['Клиент, потративший за месяц 80 000 рублей в выбранных категориях, получит 4 000 рублей кешбэка.', 'F', '5% от 80 000 — это 4 000, но кешбэк за месяц ограничен 3 000 рублей.'],
+    ['За оплату коммунальных услуг кешбэк не начисляется.', 'T', 'Прямо сказано в тексте.'],
+    ['Если сумма покупок клиента за месяц составила 8 000 рублей, за обслуживание карты в этом месяце он заплатит 99 рублей.', 'T', 'Покупок меньше 10 000 рублей, значит, обслуживание платное.'],
+    ['Большинство клиентов банка получают максимальный кешбэк.', 'C', 'Данных о том, сколько получают клиенты, в тексте нет.']], [
+    ['На покупки вне выбранных категорий начисляется 1% кешбэка.', 'T', 'Прямо сказано в тексте.'],
+    ['Карта «Каскада» выгоднее карт других банков.', 'C', 'Другие банки в тексте не упоминаются.']]);
+  PG('ru', 'Ночной ремонт дорог', 'С мая мэрия разрешает ремонтировать дороги в центре города только с 22:00 до 6:00. За ночные смены подрядчикам доплачивают 15% к стоимости работ. По расчётам мэрии, дневной ремонт одного квартала создаёт пробки, из-за которых водители в сумме теряют около 4 000 часов в неделю. Жители домов рядом с площадкой ремонта могут пожаловаться на шум; работы на этой площадке переносятся только после третьей жалобы за неделю.', [
+    ['За работу в ночную смену подрядчику доплачивают 15% к стоимости работ.', 'T', 'За ночные смены доплачивают 15% к стоимости работ.'],
+    ['С мая ремонт дорог в центре можно начинать в 7 утра.', 'F', 'Ремонт разрешён только с 22:00 до 6:00.'],
+    ['На шум жалуются в основном пожилые жители.', 'C', 'Кто именно жалуется, в тексте не сказано.'],
+    ['После двух жалоб за неделю работы на площадке переносятся.', 'F', 'Работы переносятся только после третьей жалобы.']], [
+    ['Ночной ремонт полностью избавит центр от пробок.', 'C', 'Текст говорит о пробках из-за дневного ремонта, а не о пробках в целом.'],
+    ['Жители домов рядом с площадкой ремонта могут пожаловаться на шум.', 'T', 'Прямо сказано в тексте.']]);
+  PG('en', 'Car-sharing tariffs', 'The car-sharing service CityGo charges 20 cents per minute of driving. Since March it has also offered a daily tariff: $49 for 24 hours, including 200 km; each additional kilometre costs 25 cents. Fuel is included in both tariffs. A car left outside the designated parking zone incurs an $80 penalty. According to the service, the average per-minute trip lasts 27 minutes.', [
+    ['The average per-minute trip costs less than $6.', 'T', '27 minutes × $0.20 = $5.40.'],
+    ['Daily-tariff customers pay for fuel separately.', 'F', 'Fuel is included in both tariffs.'],
+    ['The daily tariff is used mainly for trips out of the city.', 'C', 'The passage says nothing about the purpose of daily-tariff trips.'],
+    ['A day on the daily tariff with 250 km driven costs $61.50.', 'T', '$49 + 50 km × $0.25 = $61.50.']], [
+    ['A four-hour trip on the per-minute tariff costs more than the daily tariff.', 'F', '240 minutes × $0.20 = $48, which is less than $49.'],
+    ['Leaving a car outside the designated zone costs $80.', 'T', 'Stated directly.']]);
+  PG('en', 'Night-time road works', 'From May, the city council allows road works in the city centre only between 10 p.m. and 6 a.m. Contractors receive a 15% premium on the cost of work done on night shifts. The council estimates that daytime works on a single block cause congestion that costs drivers a combined 4,000 hours a week. Residents living near a works site can complain about noise; work at that site is rescheduled only after the third complaint in a week.', [
+    ['For night shifts, a contractor is paid a 15% premium on the cost of the work.', 'T', 'Night shifts carry a 15% premium on the cost of work.'],
+    ['From May, road works in the city centre may start at 7 a.m.', 'F', 'Works are allowed only between 10 p.m. and 6 a.m.'],
+    ['Most noise complaints come from elderly residents.', 'C', 'The passage does not say who complains.'],
+    ['Work at a site is rescheduled after two complaints in a week.', 'F', 'Work is rescheduled only after the third complaint.']], [
+    ['Night-time works will remove congestion from the city centre altogether.', 'C', 'The passage covers congestion caused by daytime works, not congestion in general.'],
+    ['Residents living near a works site can complain about noise.', 'T', 'Stated directly.']]);
+
+  var g0 = V.length;
+  // analysis items (main idea, inference, contradiction, assumption, strengthen, weaken) outside oil & gas; the first option is the key
+  PA('ru', 'idea', 'Многозадачность', 'Многие считают умение делать несколько дел одновременно ценным качеством. Однако исследования показывают, что мозг не выполняет две сложные задачи параллельно, а быстро переключается между ними. Каждое переключение отнимает время и внимание, поэтому работа, которую прерывают уведомления и письма, занимает больше времени и содержит больше ошибок. Руководители, которые хотят повысить продуктивность, всё чаще выделяют сотрудникам часы без встреч и сообщений.', [
+    ['Переключение между задачами снижает продуктивность, поэтому компании ограждают сотрудников от отвлечений.', 'Эта мысль охватывает весь текст: в чём проблема, почему она возникает и что с ней делают.'],
+    ['Тренированный мозг способен выполнять две сложные задачи одновременно, не переключаясь между ними.', 'Противоречит тексту: мозг не выполняет сложные задачи параллельно, о тренировке ничего не сказано.'],
+    ['Уведомления и письма — главная причина ошибок в работе, поэтому их стоит отключать на весь рабочий день.', 'Не сказано: текст не называет уведомления главной причиной ошибок и не предлагает отключать их на весь день.'],
+    ['Часы без встреч повышают продуктивность сильнее, чем любые другие меры руководителей.', 'Не сказано: с другими мерами такие часы в тексте не сравниваются.'],
+    ['Умение делать несколько дел одновременно ценят прежде всего руководители.', 'Не сказано: кто именно ценит это умение, в тексте не уточняется.']]);
+  PA('ru', 'idea', 'Онлайн-курсы', 'Онлайн-курсы сделали обучение доступнее: записаться можно из любой точки мира, часто бесплатно. Но до конца такие курсы доходят немногие — по разным оценкам, от 5 до 15% записавшихся. Выше всего доля завершивших на курсах с жёсткими сроками сдачи заданий, обратной связью от преподавателя и группой однокурсников. Иными словами, доступность материалов сама по себе не гарантирует результата: людям нужны структура и поддержка.', [
+    ['Возможность записаться на курс ещё не означает, что человек его закончит: решают организация обучения и поддержка.', 'Эта мысль охватывает весь текст: доступность, низкая завершаемость и то, от чего она зависит.'],
+    ['Онлайн-курсы дают знания хуже, чем очное обучение в университете.', 'Такого сравнения в тексте нет.'],
+    ['Большинство онлайн-курсов бесплатны, поэтому слушатели легко бросают их, не дойдя даже до середины программы.', 'Не сказано: «часто бесплатно» — не «большинство», и связь с отказом от курса не установлена.'],
+    ['На курсах с жёсткими сроками и обратной связью до конца доходит больше половины записавшихся.', 'Не сказано: известно лишь, что там доля завершивших выше, чем на других курсах; конкретных цифр нет.'],
+    ['Чтобы больше людей доходили до конца, курсы нужно сделать платными.', 'Не сказано: о плате как способе повысить завершаемость в тексте нет ни слова.']]);
+  PA('ru', 'infer', 'Бесплатная парковка', 'На парковке торгового центра первые два часа бесплатны для водителей, которые предъявили чек из любого магазина центра на сумму от 1 000 рублей. Остальные водители платят с первой минуты. В субботу Олег провёл на парковке полтора часа и ничего не заплатил.', [
+    ['Олег предъявил чек из торгового центра на сумму не меньше 1 000 рублей.', 'Следует обязательно: без такого чека он платил бы с первой минуты.'],
+    ['В субботу Олег купил продукты в супермаркете торгового центра.', 'Не следует: известно только, что у него был чек на сумму от 1 000 рублей, но не из какого магазина.'],
+    ['Если бы Олег пробыл на парковке три часа, он заплатил бы за все три часа.', 'Не следует: как оплачивается время после двух бесплатных часов, в тексте не сказано.'],
+    ['В субботу Олег сделал покупку в торговом центре.', 'Не следует: правило не требует, чтобы чек был получен в тот же день.'],
+    ['В субботу парковка торгового центра была заполнена полностью.', 'Не следует: о заполненности парковки ничего не сказано.']]);
+  PA('ru', 'contra', 'Реконструкция парка', 'Реконструкция городского парка «Липовый» проходит в два этапа. Первый этап — новые дорожки и освещение — завершён в 2025 году и обошёлся в 180 млн рублей. Второй этап, который включает детские площадки и пруд, начнётся весной 2026 года. Весь проект финансируется из бюджета города, частные инвесторы в нём не участвуют. На время второго этапа парк закроют только частично.', [
+    ['Часть работ второго этапа оплачивает частный инвестор.', 'Противоречит тексту: весь проект финансирует город, частных инвесторов нет.'],
+    ['Первый этап реконструкции обошёлся дороже второго.', 'Не противоречит: стоимость второго этапа не названа.'],
+    ['Освещение в парке уже обновлено.', 'Совпадает с текстом: освещение входило в первый этап, который завершён.'],
+    ['Пруд после реконструкции откроется летом 2027 года.', 'Не противоречит: срок окончания второго этапа не назван.'],
+    ['Во время второго этапа часть парка будет открыта для посетителей.', 'Совпадает с текстом: парк закроют только частично.']]);
+  PA('ru', 'assume', 'Онлайн-бронирование', 'Владелец ресторана считает, что онлайн-бронирование увеличит выручку: гости, которые сейчас не могут дозвониться в часы пик, начнут бронировать столики через сайт и перестанут уходить к конкурентам.', [
+    ['Часть гостей, которые не дозвонились, уходит в другие рестораны, а не перезванивает позже.', 'Без этого допущения вывод рушится: если гости просто перезванивают, ресторан их не теряет и выручка не вырастет.'],
+    ['Онлайн-бронирование обходится ресторану дешевле, чем работа администратора.', 'Не требуется: рассуждение о выручке, а не о затратах.'],
+    ['Большинство гостей готовы бронировать столик через сайт.', 'Не требуется: для роста выручки достаточно, чтобы через сайт бронировала хотя бы часть гостей.'],
+    ['У ближайших конкурентов, к которым уходят гости в часы пик, онлайн-бронирования пока нет.', 'Не требуется: вывод верен, даже если у конкурентов оно уже есть.'],
+    ['Цены в меню ресторана в этом году не изменятся.', 'Не относится к рассуждению.']]);
+  PA('ru', 'strengthen', 'Позднее начало уроков', 'Директор школы считает, что перенос начала уроков с 8:00 на 9:00 улучшит успеваемость старшеклассников: подростки будут больше спать и лучше усваивать материал на первых уроках.', [
+    ['В школах, где уроки перенесли на 9:00, старшеклассники стали спать в среднем на 40 минут дольше.', 'Подкрепляет: подтверждает ключевую посылку — перенос действительно добавляет сон.'],
+    ['Первыми уроками у старшеклассников чаще всего стоят математика и физика.', 'Не влияет: порядок предметов не говорит о том, будут ли ученики больше спать.'],
+    ['После переноса старшеклассники будут дольше делать домашние задания вечером и в итоге ложиться спать позже.', 'Ослабляет: дополнительное утреннее время может не превратиться в дополнительный сон.'],
+    ['Перенос начала уроков потребует изменить расписание школьных автобусов.', 'Не влияет: это вопрос организации, а не успеваемости.'],
+    ['Родители большинства учеников поддерживают перенос.', 'Не влияет: мнение родителей не говорит о том, улучшится ли успеваемость.']]);
+  PA('ru', 'weaken', 'Кассы самообслуживания', 'После установки касс самообслуживания в супермаркете среднее время ожидания в очереди сократилось с 9 до 4 минут. Управляющий делает вывод, что очереди сократились благодаря новым кассам.', [
+    ['В том же месяце магазин нанял ещё четырёх кассиров и открыл дополнительные обычные кассы.', 'Ослабляет: есть другая причина сокращения очередей, и вклад новых касс неясен.'],
+    ['В соседнем магазине сети без касс самообслуживания время ожидания за тот же период не изменилось.', 'Подкрепляет: сокращение не объясняется общими условиями.'],
+    ['В том же месяце число покупателей в будние дни снизилось на 5%.', 'Ослабляет слабее, чем найм кассиров: 5% покупателей вряд ли объясняют сокращение ожидания больше чем вдвое.'],
+    ['Часть покупателей предпочитает обслуживаться у кассира.', 'Не влияет: это не говорит о том, почему очереди стали короче.'],
+    ['Управляющий сам предложил установить новые кассы.', 'Не опровергает вывод: мотивы автора не меняют фактов.']]);
+
+  PA('en', 'idea', 'Multitasking', 'Many people regard the ability to do several things at once as a valuable skill. Research shows, however, that the brain does not carry out two demanding tasks in parallel; it switches rapidly between them. Each switch costs time and attention, so work interrupted by notifications and emails takes longer and contains more errors. Managers who want to raise productivity increasingly give staff blocks of time without meetings or messages.', [
+    ['Switching between tasks reduces productivity, so employers are protecting staff from interruptions.', 'This covers the whole passage: the problem, its cause and the response.'],
+    ['With enough practice, the brain can carry out two demanding tasks at the same time without switching.', 'Contradicts the passage: the brain does not run demanding tasks in parallel, and practice is not mentioned.'],
+    ['Notifications and emails are the main cause of errors at work, so they should be switched off for the whole day.', 'Not stated: the passage does not call them the main cause of errors or suggest switching them off all day.'],
+    ['Meeting-free time raises productivity more than any other step managers can take.', 'Not stated: meeting-free time is not compared with other measures.'],
+    ['Managers value multitasking more highly than other employees do.', 'Not stated: the passage does not say who values the skill.']]);
+  PA('en', 'infer', 'Free parking', 'At a shopping centre car park, the first two hours are free for drivers who show a receipt of at least $20 from any store in the centre. All other drivers pay from the first minute. On Saturday, Omar parked there for an hour and a half and paid nothing.', [
+    ['Omar showed a receipt of at least $20 from a store in the centre.', 'Follows: without such a receipt he would have paid from the first minute.'],
+    ['On Saturday Omar bought groceries at the centre’s supermarket.', 'Does not follow: we know he had a qualifying receipt, not which store it came from.'],
+    ['Had Omar stayed for three hours, he would have paid for all three.', 'Does not follow: the passage does not say how time after the free two hours is charged.'],
+    ['Omar made a purchase at the centre on Saturday.', 'Does not follow: the rule does not require the receipt to be from the same day.'],
+    ['The car park was full on Saturday.', 'Does not follow: occupancy is not mentioned.']]);
+  PA('en', 'contra', 'Park renovation', 'The renovation of Linden Park is being carried out in two phases. The first phase — new paths and lighting — was completed in 2025 at a cost of $2.2 million. The second phase, covering playgrounds and the pond, will begin in spring 2026. The whole project is funded from the city budget; no private investors are involved. During the second phase the park will be only partly closed.', [
+    ['A private investor is paying for part of the second phase.', 'Contradicts the passage: the city funds the whole project and no private investors are involved.'],
+    ['The first phase cost more than the second.', 'No contradiction: the cost of the second phase is not given.'],
+    ['The park’s lighting has already been renewed.', 'Consistent: lighting was part of the completed first phase.'],
+    ['The pond will reopen in summer 2027.', 'No contradiction: the end date of the second phase is not given.'],
+    ['Part of the park will stay open to visitors during the second phase.', 'Consistent: the park will be only partly closed.']]);
+  PA('en', 'assume', 'Online booking', 'A restaurant owner argues that introducing online booking will raise revenue, because guests who cannot get through by phone at peak times will book tables on the website instead of going to competitors.', [
+    ['Some guests who cannot get through go to other restaurants rather than calling back later.', 'The argument needs this: if they simply call back, the restaurant loses no guests and revenue will not rise.'],
+    ['Online booking costs the restaurant less than paying a host to answer the phone.', 'Not required: the argument is about revenue, not costs.'],
+    ['Most guests are willing to book a table online.', 'Not required: revenue can rise even if only some guests book online.'],
+    ['The nearby competitors that guests turn to at peak times do not yet offer online booking either.', 'Not required: the conclusion holds even if competitors already offer it.'],
+    ['Menu prices will not change this year.', 'Irrelevant to the argument.']]);
+  PA('en', 'strengthen', 'Later school start', 'A head teacher argues that moving the start of lessons from 8:00 to 9:00 will improve older students’ results, because teenagers will get more sleep and take in material better in the first lessons.', [
+    ['At schools that moved to a 9:00 start, older students slept on average 40 minutes longer.', 'Strengthens: it confirms the key premise that the later start adds sleep.'],
+    ['Older students most often have maths and physics as their first lessons.', 'Does not affect the claim: the order of subjects says nothing about whether students will sleep more.'],
+    ['After the change, students will finish homework later in the evening and end up going to bed later than before.', 'Weakens: the extra morning time may not turn into extra sleep.'],
+    ['The later start will require changes to the school bus timetable.', 'Does not affect the claim: it concerns logistics, not results.'],
+    ['Most parents support the change.', 'Does not affect the claim: parents’ views say nothing about whether results will improve.']]);
+  PA('en', 'weaken', 'Self-checkout tills', 'After a supermarket installed self-checkout tills, the average wait in the queue fell from 9 to 4 minutes. The manager concludes that the queues became shorter because of the new tills.', [
+    ['In the same month the store hired four more cashiers and opened extra staffed tills.', 'Weakens: there is another cause, so the effect of the new tills is unclear.'],
+    ['At a nearby branch without self-checkout tills, waiting times did not change over the same period.', 'Strengthens: the fall is not a general trend.'],
+    ['In the same month, weekday customer numbers fell by 5%.', 'Weakens less than the extra cashiers: 5% fewer shoppers can hardly explain waits falling by more than half.'],
+    ['Some shoppers prefer to be served by a cashier.', 'Irrelevant: it does not explain why the queues became shorter.'],
+    ['The manager proposed installing the new tills.', 'Does not weaken the conclusion: the author’s motives do not change the facts.']]);
+  // passages from earlier versions that are also outside oil & gas
+  [73, 82, 83, 84, 39, 66, 76, 78, 80, 89, 90, 91, 92].forEach(function (id) { if (V[id]) V[id].gen = true; });
+  for (var gi = g0; gi < V.length; gi++) V[gi].gen = true;
 
 
   /* ======================= CRITICAL THINKING: Watson-Glaser III style (TalentLens) ======================= */
@@ -5349,6 +5695,28 @@ var ENGINE = (function () {
     });
     return out.slice(0, n);
   };
+  // why a neighbouring answer is wrong: WG_WHY[section][key][chosen]
+  var WG_WHY = (function () {
+    var opp = T('Противоположная оценка: факты говорят в другую сторону.', 'The opposite judgement: the facts point the other way.');
+    var notCovered = T('Слишком уверенно: в тексте нет фактов ни за, ни против этого вывода.', 'Too confident: the passage has no facts for or against this inference.');
+    var leanNone = T('Для «скорее…» нужны факты, которые склоняют в одну сторону, а текст этого вопроса не касается.', '“Probably …” needs facts that lean one way, but the passage does not address the question.');
+    return {
+      inf: {
+        T: { PT: T('«Скорее верно» — слишком осторожно: вывод прямо следует из фактов, сомнений не остаётся.', '“Probably true” is too cautious: the inference follows directly from the facts, leaving no doubt.'), ID: T('Данных достаточно: в тексте есть факты, из которых вывод следует напрямую.', 'There is enough data: the passage contains facts from which the inference follows directly.'), PF: opp, F: opp },
+        PT: { T: T('«Верно» — слишком сильно: факты делают вывод вероятным, но не доказывают его, разумное сомнение остаётся.', '“True” is too strong: the facts make the inference likely but do not prove it; reasonable doubt remains.'), ID: T('«Недостаточно данных» — слишком осторожно: текст касается вопроса, и факты склоняют к тому, что вывод верен.', '“Insufficient data” is too cautious: the passage bears on the question and the facts lean towards the inference being true.'), PF: T('Направление перепутано: факты говорят скорее за вывод, чем против него.', 'Wrong direction: the facts lean towards the inference, not against it.'), F: opp },
+        ID: { T: notCovered, F: notCovered, PT: leanNone, PF: leanNone },
+        PF: { F: T('«Неверно» — слишком сильно: факты делают вывод маловероятным, но прямо его не опровергают.', '“False” is too strong: the facts make the inference unlikely but do not rule it out.'), ID: T('«Недостаточно данных» — слишком осторожно: текст касается вопроса, и факты склоняют к тому, что вывод неверен.', '“Insufficient data” is too cautious: the passage bears on the question and the facts lean against the inference.'), PT: T('Направление перепутано: факты говорят скорее против вывода, чем за него.', 'Wrong direction: the facts lean against the inference, not towards it.'), T: opp },
+        F: { PF: T('«Скорее неверно» — слишком осторожно: вывод прямо противоречит фактам текста.', '“Probably false” is too cautious: the inference directly contradicts the facts in the passage.'), ID: T('Данных достаточно: в тексте есть факты, которые прямо опровергают вывод.', 'There is enough data: the passage contains facts that directly refute the inference.'), PT: opp, T: opp }
+      },
+      asm: { Y: { N: T('Без этого допущения утверждение теряет смысл — значит, автор его принимает, хотя и не говорит прямо.', 'Without this assumption the statement makes no sense, so the author takes it for granted even though it is not stated.') }, N: { Y: T('Утверждение остаётся разумным и без этого допущения: автору не нужно его принимать.', 'The statement still makes sense without this assumption, so the author does not need to take it for granted.') } },
+      ded: { Y: { N: T('Вывод обязательно вытекает из посылок, даже если в жизни он кажется сомнительным: оценивайте логику, а не правдоподобие.', 'The conclusion must follow from the premises even if it seems doubtful in real life: judge the logic, not plausibility.') }, N: { Y: T('Вывод может оказаться верным, но из посылок он не вытекает обязательно: возможен случай, когда посылки верны, а вывод — нет.', 'The conclusion may be true, but it does not have to follow: the premises can be true while the conclusion is false.') } },
+      int: { Y: { N: T('Вывод следует из данных вне разумных сомнений — не требуйте больше доказательств, чем нужно.', 'The conclusion follows beyond reasonable doubt — do not demand more proof than needed.') }, N: { Y: T('Вывод выходит за пределы данных: обобщает или додумывает то, чего в тексте нет.', 'The conclusion goes beyond the data: it generalises or adds what the passage does not say.') } },
+      arg: { S: { W: T('Аргумент важен и прямо относится к вопросу — это сильный аргумент, даже если вы с ним не согласны.', 'The argument is important and directly relevant — it is strong even if you disagree with it.') }, W: { S: T('Аргумент не касается сути вопроса, малозначителен или подменяет главное второстепенным — он слабый, даже если звучит убедительно.', 'The argument misses the heart of the question, is trivial or confuses the main issue with a side one — it is weak even if it sounds convincing.') } }
+    };
+  })();
+  // inference: on the 5-point scale, also explain the nearest neighbour of the key in the solution
+  var WG_NEAR = { T: 'PT', PT: 'T', ID: 'PT', PF: 'F', F: 'PF' };
+  E.WG_WHY = WG_WHY;
   E.genWG = function (item, level) {
     var w = WG[item.wg], s = w.st[item.s], opts = WG_OPT[w.sec], ci = opts.map(function (o) { return o[0]; }).indexOf(s[1]);
     var lab = { inf: T('Вывод', 'Proposed inference'), asm: T('Предполагаемое допущение', 'Proposed assumption'), ded: T('Вывод', 'Conclusion'), int: T('Вывод', 'Conclusion'), arg: T('Аргумент', 'Argument') }[w.sec];
@@ -5358,8 +5726,19 @@ var ENGINE = (function () {
       prompt: { inf: T('Насколько вывод следует из фактов?', 'How far does the inference follow from the facts?'), asm: T('Сделано ли это допущение?', 'Is this assumption made?'), ded: T('Следует ли вывод из утверждений?', 'Does the conclusion follow?'), int: T('Следует ли вывод из текста вне разумных сомнений?', 'Does the conclusion follow beyond reasonable doubt?'), arg: T('Это сильный или слабый аргумент?', 'Is this a strong or a weak argument?') }[w.sec],
       visual: function (lang) { return '<p class="note">' + esc(L(WG_RULE[w.sec], lang)) + '</p><article class="passage"><h3>' + esc(L(WG_NAME[w.sec], lang)) + '</h3><p>' + esc(w.q || w.text) + '</p></article><div class="statement"><span class="lbl">' + esc(L(lab, lang)) + '</span>' + esc(s[0]) + '</div>'; },
       options: opts.map(function (o) { return { html: function (lang) { return esc(L(o[1], lang)); } }; }), correct: ci,
-      solution: function (lang) { return '<p><b>' + esc(L(opts[ci][1], lang)) + '.</b> ' + esc(s[2]) + '</p>'; },
-      notes: opts.map(function (o, i) { return i === ci ? T('Верный ответ.', 'Correct answer.') : T('Правильно: «' + opts[ci][1].ru + '». ' + s[2], 'The right answer is “' + opts[ci][1].en + '”. ' + s[2]); }),
+      solution: function (lang) {
+        var h = '<p><b>' + esc(L(opts[ci][1], lang)) + '.</b> ' + esc(s[2]) + '</p>';
+        var nk = w.sec === 'inf' ? WG_NEAR[s[1]] : opts.filter(function (o) { return o[0] !== s[1]; })[0][0], why = WG_WHY[w.sec][s[1]] && WG_WHY[w.sec][s[1]][nk];
+        var no = opts.filter(function (o) { return o[0] === nk; })[0];
+        if (why && no) { var wt = L(why, lang), named = wt.charAt(0) === '«' || wt.charAt(0) === '“'; h += '<p>' + (named ? '' : esc(lang === 'ru' ? 'Почему не «' + no[1].ru + '»: ' : 'Why not “' + no[1].en + '”: ')) + esc(wt) + '</p>'; }
+        if (w.sec === 'inf' && s[1] === 'ID') { var w2 = WG_WHY.inf.ID.T; h += '<p>' + esc(lang === 'ru' ? 'Почему не «Верно» или «Неверно»: ' : 'Why not “True” or “False”: ') + esc(L(w2, lang)) + '</p>'; }
+        return h;
+      },
+      notes: opts.map(function (o, i) {
+        if (i === ci) return T('Верный ответ.', 'Correct answer.');
+        var why = WG_WHY[w.sec][s[1]] && WG_WHY[w.sec][s[1]][o[0]];
+        return why ? why : T('Правильно: «' + opts[ci][1].ru + '». ' + s[2], 'The right answer is “' + opts[ci][1].en + '”. ' + s[2]);
+      }),
       tip: { inf: T('Отделяйте то, что сказано, от того, что вероятно. «Верно» и «Неверно» — только когда факты не оставляют сомнений; «Недостаточно данных» — когда текст вообще не касается вопроса.', 'Separate what is stated from what is likely. Use True and False only when the facts leave no doubt; Insufficient data when the passage does not touch the point at all.'), asm: T('Спросите себя: если это допущение неверно, рассуждение развалится? Если да — допущение сделано.', 'Ask: if this assumption were false, would the argument collapse? If so, it is being made.'), ded: T('Не используйте знания о мире: только то, что дано. Слова «все», «некоторые», «ни один» — ключ; «некоторые» не значит «не все».', 'Use nothing but what is given. The words all, some and no are the key; “some” does not mean “not all”.'), int: T('Это мягче дедукции: вывод должен быть вне разумных сомнений, но не обязательно логически неизбежен. Остерегайтесь обобщений со слов «каждый» и «всегда».', 'This is less strict than deduction: beyond reasonable doubt, not logically certain. Beware of generalisations with every and always.'), arg: T('Не оценивайте, согласны ли вы. Аргумент сильный, если он важен и прямо касается вопроса; ссылки на чужой опыт, популярность и личные вкусы — обычно слабые.', 'Do not judge whether you agree. An argument is strong if it is important and directly about the question; appeals to what others do, popularity or personal taste are usually weak.') }[w.sec]
     };
   };
@@ -6275,7 +6654,7 @@ var ENGINE = (function () {
     lvHint: [T('Два правила в рядах, простые расчёты — для разминки и знакомства с форматом.', 'Two rules per series and simple calculations — a warm-up to learn the format.'), T('Уровень руководящих позиций: три правила одновременно, многошаговые расчёты, CAGR.', 'Management level: three rules at once, multi-step calculations, CAGR.'), T('Как верхняя ступень адаптивного теста: растущие шаги, восемь вариантов в матрицах, сложные выводы.', 'Like the top of an adaptive test: growing steps, eight options in matrices, harder conclusions.')],
     startTrain: T('Начать тренировку', 'Start practice'), allTypes: T('Все типы', 'All types'),
     yourAcc: T('Ваша точность', 'Your accuracy'), answers: T('ответов', 'answers'), noData: T('Ещё нет ответов', 'No answers yet'),
-    examNote: T('Число вопросов и лимиты времени взяты из открытых источников (фактлисты SHL, сайты ЭКОПСИ, обзоры подготовительных сервисов) и могут отличаться у конкретного работодателя. Интерактивные задания SHL представлены рассадкой и ранжированием по сетке, выбором на расписании и в календаре, вводом числа, перетаскиванием столбцов графика и заполнением таблиц. В Korn Ferry к каждой таблице и тексту идёт по три вопроса с лимитами 90/75/75 и 75/60/60 секунд. Как и в реальных адаптивных тестах, вернуться к прошлому вопросу нельзя. В режиме экзамена разбор показывается в конце.', 'Question counts and time limits come from public sources (SHL fact sheets, Ecopsy sites, prep-provider guides) and may differ by employer. SHL interactive tasks appear here as grid allocation and ranking, picking slots on schedules and calendars, typed numbers, dragging chart bars and filling in tables. In Korn Ferry each table or passage carries three questions, timed 90/75/75 and 75/60/60 seconds. As in real adaptive tests, you cannot go back to a previous question. In exam mode the breakdown is shown at the end.'),
+    examNote: T('Число вопросов и лимиты времени взяты из открытых источников (фактлисты SHL, сайты ЭКОПСИ, обзоры подготовительных сервисов) и могут отличаться у конкретного работодателя. Интерактивные задания SHL представлены рассадкой и ранжированием по сетке, выбором на расписании и в календаре, вводом числа, перетаскиванием столбцов графика и заполнением таблиц. В Korn Ferry к каждой таблице и тексту идёт по три вопроса с лимитами 90/75/75 и 75/60/60 секунд. Как и в реальных адаптивных тестах, вернуться к прошлому вопросу нельзя. В режиме экзамена разбор показывается в конце. Метки: «подтверждено» — число вопросов, время и таймер совпадают с источником, названным под тестом; «упрощено» — что-то отличается от реального теста или известно лишь приблизительно. Если страница закроется или перезагрузится во время экзамена, он продолжится с того же вопроса, а время всё это время идёт, как в настоящем онлайн-тесте.', 'Question counts and time limits come from public sources (SHL fact sheets, Ecopsy sites, prep-provider guides) and may differ by employer. SHL interactive tasks appear here as grid allocation and ranking, picking slots on schedules and calendars, typed numbers, dragging chart bars and filling in tables. In Korn Ferry each table or passage carries three questions, timed 90/75/75 and 75/60/60 seconds. As in real adaptive tests, you cannot go back to a previous question. In exam mode the breakdown is shown at the end. Labels: “confirmed” — item count, time and timer match the source named under the test; “simplified” — something differs from the real test or is known only approximately. If the page closes or reloads during an exam, it resumes at the same item, and the clock keeps running meanwhile, as in a real online test.'),
     start: T('Начать', 'Start'),
     check: T('Проверить', 'Check'), next: T('Следующий вопрос', 'Next question'), finish: T('К результатам', 'See results'), answer: T('Ответить', 'Submit'),
     quit: T('Завершить', 'End'), quitQ: T('Завершить сессию?', 'End the session?'), yes: T('Да, завершить', 'Yes, end'), no: T('Продолжить', 'Keep going'),
@@ -6304,27 +6683,27 @@ var ENGINE = (function () {
   var MODS = {
     ind: { name: T('Абстрактно-логический', 'Abstract reasoning'), sub: T('Индуктивный тест: ряды и матрицы, движение по сетке с отвлекающим элементом, повороты и стрелки как в Korn Ferry, наложение фигур, счёт элементов, коды-цепочки как в SHL Interactive.', 'Inductive test: series and matrices, grid movement with a distractor, Korn Ferry-style rotations and arrows, overlays, counting, and SHL Interactive-style code chains.'), types: [['series', T('Ряды фигур', 'Figure series')], ['matrix', T('Матрицы 3×3', '3×3 matrices')], ['odd', T('Лишняя фигура', 'Odd one out')], ['grid', T('Движение по сетке', 'Grid movement')], ['rot', T('Повороты в матрице', 'Rotation matrices')], ['arrows', T('Стрелки в матрице', 'Arrow matrices')], ['overlay', T('Наложение фигур', 'Overlays')], ['count', T('Счёт элементов', 'Counting')], ['code', T('Коды и цепочки', 'Codes and chains')], ['raven', T('Матрицы Равена (KFALP)', 'Raven’s matrices (KFALP)')], ['ravenov', T('Сложение и вычитание фигур', 'Adding and subtracting figures')], ['ravenpc', T('Недостающий фрагмент', 'Missing piece')], ['tiles', T('Поворот узора (Cognify)', 'Turning a pattern (Cognify)')], ['fill', T('Заполнить силуэт (Cognify)', 'Fill the silhouette (Cognify)')], ['switch', T('Коды перестановки (Aon)', 'Switch codes (Aon)')], ['groups', T('Группы A и B', 'Groups A and B')]] },
     num: { name: T('Числовой', 'Numerical reasoning'), sub: T('Таблицы, столбчатые, круговые и линейные графики, отчётность, план-факт. Проценты, доли, CAGR, обратный процент, средневзвешенное, отношения и «во сколько раз», пересчёт валют стран Залива. Можно отвечать вводом числа, как в SHL, или из длинного списка, как в Korn Ferry.', 'Tables, bar, pie and line charts, financial statements, budget vs actual. Percentages, shares, CAGR, reverse percentages, weighted averages, ratios and “how many times”, Gulf currency conversions. Answer by typing the number as in SHL, or from a long list as in Korn Ferry.'), types: [['std', T('Таблицы (классика)', 'Tables (classic)')], ['big', T('Большие таблицы (Switch для менеджеров)', 'Large tables (Switch for managers)')], ['charts', T('Графики', 'Charts')], ['fin', T('Отчётность и план-факт', 'Financials, budget vs actual')], ['calc', T('Обратный %, средневзвешенное', 'Reverse %, weighted average')], ['multi', T('Несколько верных ответов', 'Multiple correct answers')], ['input', T('Ввод числа (SHL)', 'Type the number (SHL)')], ['shlint', T('Графики и таблицы (SHL Interactive)', 'Charts and tables (SHL Interactive)')], ['long', T('Длинный список (Korn Ferry)', 'Long list (Korn Ferry)')], ['biz', T('Бизнес-данные (не нефтегаз)', 'General business data')], ['bubbles', T('Уравнения на скорость (Cognify)', 'Equation bubbles (Cognify)')], ['puzzle', T('Головоломки с собеседований', 'Interview puzzles')], ['suff', T('Достаточность данных', 'Data sufficiency')], ['ratio', T('Отношения, «во сколько раз»', 'Ratios, “how many times”')], ['gcc', T('Валюты стран Залива', 'Gulf currencies')]] },
-    ded: { name: T('Дедуктивный', 'Deductive reasoning'), sub: T('Как в SHL Verify Interactive Deductive и G+: порядок и рейтинги, рассадка по кабинетам, свободное окно в расписании, календарь, планирование задач, правила «если…, то…», вопросы «обязательно / может / не может».', 'As in SHL Verify Interactive Deductive and G+: ordering and ranking, room allocation, free slots in a schedule, calendars, task scheduling, if–then rules and must / could / cannot questions.'), types: [['order', T('Порядок и рейтинги', 'Ordering and ranking')], ['rank', T('Ранжирование', 'Ranking')], ['ordmc', T('Может / должно / не может', 'Must / could / cannot')], ['rooms', T('Рассадка по кабинетам', 'Room allocation')], ['slot', T('Расписание', 'Schedules')], ['cal', T('Календарь', 'Calendar')], ['tasks', T('Планирование задач', 'Task planning')], ['ifthen', T('Если…, то…', 'If–then rules')], ['syll', T('Логические выводы', 'Logical conclusions')]] },
-    verb: { name: T('Вербальный', 'Verbal reasoning'), sub: T('Деловые тексты отрасли и общие бизнес-темы: «Верно / Неверно / Нельзя сказать», выбор 1–2 утверждений как в Korn Ferry, анализ текста в стиле ЭКОПСИ, критическое мышление в формате Watson-Glaser и понимание текста в формате SHL Verbal Ability. Около 60 текстов на каждом языке, ещё 38 — для Watson-Glaser и 24 — на понимание текста в формате SHL Verbal Ability.', 'Industry and general business passages: True / False / Cannot say, Korn Ferry-style “choose 1–2 statements”, Ecopsy-style text analysis, Watson-Glaser-style critical thinking and SHL Verbal Ability-style reading comprehension. About 60 passages in each language, plus 38 for Watson-Glaser and 24 for SHL Verbal Ability-style reading comprehension.'), types: [['tfc', T('Верно / Неверно / Нельзя сказать', 'True / False / Cannot say')], ['multi', T('Выбор 1–2 утверждений', 'Choose 1–2 statements')], ['pick', T('Противоречие / нет данных', 'Contradiction / no data')], ['long', T('Длинные тексты (SHL)', 'Long passages (SHL)')], ['ana', T('Анализ текста (ЭКОПСИ)', 'Text analysis (Ecopsy)')], ['wg', T('Критическое мышление (Watson-Glaser)', 'Critical thinking (Watson-Glaser)')], ['va', T('Понимание текста (SHL Verbal Ability)', 'Reading comprehension (SHL Verbal Ability)')]] }
+    ded: { name: T('Дедуктивный', 'Deductive reasoning'), sub: T('Как в SHL Verify Interactive Deductive и G+: порядок и рейтинги, рассадка по кабинетам, свободное окно в расписании, календарь, планирование задач, правила «если…, то…», «где сотрудник в 14:30», вопросы «обязательно / может / не может / не следует».', 'As in SHL Verify Interactive Deductive and G+: ordering and ranking, room allocation, free slots in a schedule, calendars, task scheduling, if–then rules, “who is where at 14:30”, and must / could / cannot / does-not-follow questions.'), types: [['order', T('Порядок и рейтинги', 'Ordering and ranking')], ['rank', T('Ранжирование', 'Ranking')], ['where', T('Где сотрудник в 14:30 (SHL)', 'Who is where at 14:30 (SHL)')], ['ordmc', T('Может / должно / не может', 'Must / could / cannot')], ['rooms', T('Рассадка по кабинетам', 'Room allocation')], ['slot', T('Расписание', 'Schedules')], ['cal', T('Календарь', 'Calendar')], ['tasks', T('Планирование задач', 'Task planning')], ['ifthen', T('Если…, то…', 'If–then rules')], ['syll', T('Логические выводы', 'Logical conclusions')]] },
+    verb: { name: T('Вербальный', 'Verbal reasoning'), sub: T('Деловые тексты отрасли и общие бизнес-темы: «Верно / Неверно / Нельзя сказать», выбор 1–2 утверждений как в Korn Ferry, анализ текста в стиле ЭКОПСИ, критическое мышление в формате Watson-Glaser и понимание текста в формате SHL Verbal Ability. Около 70 текстов на каждом языке (около 40% — не из нефтегаза: розница, транспорт, медицина, финансы, город), ещё 38 — для Watson-Glaser и 24 — на понимание текста в формате SHL Verbal Ability.', 'Industry and general business passages: True / False / Cannot say, Korn Ferry-style “choose 1–2 statements”, Ecopsy-style text analysis, Watson-Glaser-style critical thinking and SHL Verbal Ability-style reading comprehension. About 70 passages in each language (about 40% outside oil & gas: retail, transport, health, finance, city services), plus 38 for Watson-Glaser and 24 for SHL Verbal Ability-style reading comprehension.'), types: [['tfc', T('Верно / Неверно / Нельзя сказать', 'True / False / Cannot say')], ['multi', T('Выбор 1–2 утверждений', 'Choose 1–2 statements')], ['pick', T('Противоречие / нет данных', 'Contradiction / no data')], ['long', T('Длинные тексты (SHL)', 'Long passages (SHL)')], ['ana', T('Анализ текста (ЭКОПСИ)', 'Text analysis (Ecopsy)')], ['wg', T('Критическое мышление (Watson-Glaser)', 'Critical thinking (Watson-Glaser)')], ['va', T('Понимание текста (SHL Verbal Ability)', 'Reading comprehension (SHL Verbal Ability)')]] }
   };
   var TYPE_LABEL = {
     'ind:series': T('Ряды фигур', 'Figure series'), 'ind:matrix': T('Матрицы 3×3', '3×3 matrices'), 'ind:odd': T('Лишняя фигура', 'Odd one out'), 'ind:grid': T('Движение по сетке', 'Grid movement'), 'ind:rot': T('Повороты в матрице', 'Rotation matrices'), 'ind:arrows': T('Стрелки в матрице', 'Arrow matrices'), 'ind:overlay': T('Наложение фигур', 'Overlays'), 'ind:count': T('Счёт элементов', 'Counting elements'), 'ind:code': T('Коды и цепочки', 'Codes and chains'), 'ind:raven': T('Матрицы Равена (KFALP)', 'Raven’s matrices (KFALP)'), 'ind:ravenov': T('Сложение и вычитание фигур', 'Adding and subtracting figures'), 'ind:ravenpc': T('Недостающий фрагмент', 'Missing piece'),
     'num:chart': T('Графики', 'Charts'), 'num:big': T('Большие таблицы', 'Large tables'), 'num:bars': T('Интерактивный график', 'Interactive chart'), 'num:cells': T('Заполнение таблицы', 'Table completion'), 'num:fin': T('Отчётность и план-факт', 'Financials, budget vs actual'), 'num:calc': T('Обратный %, средневзвешенное', 'Reverse %, weighted average'),
-    'ded:rooms': T('Рассадка по кабинетам', 'Room allocation'), 'ded:slot': T('Расписание', 'Schedules'), 'ded:cal': T('Календарь', 'Calendar'), 'ded:tasks': T('Планирование задач', 'Task scheduling'), 'ded:ifthen': T('Если…, то…', 'If–then rules'), 'ded:ordmc': T('Может / должно / не может', 'Must / could / cannot'), 'ded:rank': T('Ранжирование', 'Ranking'), 'verb:vpick': T('Противоречие / нет данных', 'Contradiction / no data'),
+    'ded:rooms': T('Рассадка по кабинетам', 'Room allocation'), 'ded:slot': T('Расписание', 'Schedules'), 'ded:cal': T('Календарь', 'Calendar'), 'ded:tasks': T('Планирование задач', 'Task scheduling'), 'ded:ifthen': T('Если…, то…', 'If–then rules'), 'ded:ordmc': T('Может / должно / не может', 'Must / could / cannot'), 'ded:rank': T('Ранжирование', 'Ranking'), 'ded:where': T('Где сотрудник в 14:30 (SHL)', 'Who is where at 14:30 (SHL)'), 'verb:vpick': T('Противоречие / нет данных', 'Contradiction / no data'),
     'num:pct': T('Процентное изменение', 'Percentage change'), 'num:share': T('Доли', 'Shares'), 'num:conv': T('Пересчёт единиц', 'Unit conversion'), 'num:pick': T('Выбор по показателю', 'Pick by measure'), 'num:proj': T('Прогноз по темпу', 'Projection by rate'), 'num:growth': T('Среднегодовой темп (CAGR)', 'Annual growth (CAGR)'), 'num:unit': T('Удельные показатели', 'Unit metrics'), 'num:fx': T('Цены и курс', 'Prices and FX'), 'num:multi': T('Несколько верных ответов', 'Multiple correct answers'),
     'ded:order': T('Порядок и рейтинги', 'Ordering and ranking'), 'ded:syll': T('Логические выводы', 'Logical conclusions'),
     'verb:va': T('Понимание текста (SHL Verbal Ability)', 'Reading comprehension (SHL Verbal Ability)'), 'verb:tfc': T('Верно / Неверно / Нельзя сказать', 'True / False / Cannot say'), 'verb:wg': T('Критическое мышление (Watson-Glaser)', 'Critical thinking (Watson-Glaser)'), 'ind:tiles': T('Поворот узора (Cognify)', 'Turning a pattern (Cognify)'), 'ind:fill': T('Заполнить силуэт (Cognify)', 'Fill the silhouette (Cognify)'), 'ind:switch': T('Коды перестановки (Aon)', 'Switch codes (Aon)'), 'ind:groups': T('Группы A и B', 'Groups A and B'), 'num:biz': T('Бизнес-данные', 'Business data'), 'num:bubbles': T('Уравнения на скорость (Cognify)', 'Equation bubbles (Cognify)'), 'num:puzzle': T('Головоломки с собеседований', 'Interview puzzles'), 'num:suff': T('Достаточность данных', 'Data sufficiency'), 'num:ratio': T('Отношения, «во сколько раз»', 'Ratios, “how many times”'), 'num:gcc': T('Валюты стран Залива', 'Gulf currencies'), 'verb:multi': T('Выбор 1–2 утверждений', 'Choose 1–2 statements'), 'verb:ana': T('Анализ текста (ЭКОПСИ)', 'Text analysis (Ecopsy)')
   };
-  var TYPE_FILTER = { 'ind:series': 'series', 'ind:matrix': 'matrix', 'ind:odd': 'odd', 'ded:order': 'order', 'ded:syll': 'syll', 'verb:tfc': 'tfc', 'verb:multi': 'multi', 'verb:ana': 'ana', 'num:multi': 'multi', 'num:pct': 'pct', 'num:share': 'share', 'num:conv': 'conv', 'num:pick': 'pick', 'num:proj': 'proj', 'num:growth': 'growth', 'num:unit': 'unit', 'num:fx': 'fx', 'ind:grid': 'grid', 'ind:rot': 'rot', 'ind:arrows': 'arrows', 'ind:overlay': 'overlay', 'ind:count': 'count', 'ind:code': 'code', 'ind:raven': 'raven', 'ind:ravenov': 'ravenov', 'ind:ravenpc': 'ravenpc', 'num:chart': 'charts', 'num:big': 'big', 'num:bars': 'shlint', 'num:cells': 'shlint', 'num:fin': 'fin', 'num:calc': 'calc', 'ded:rooms': 'rooms', 'ded:slot': 'slot', 'ded:cal': 'cal', 'ded:tasks': 'tasks', 'ded:ifthen': 'ifthen', 'ded:ordmc': 'ordmc', 'ded:rank': 'rank', 'verb:vpick': 'pick', 'verb:wg': 'wg', 'verb:va': 'va', 'ind:tiles': 'tiles', 'ind:fill': 'fill', 'ind:switch': 'switch', 'ind:groups': 'groups', 'num:biz': 'biz', 'num:bubbles': 'bubbles', 'num:puzzle': 'puzzle', 'num:suff': 'suff', 'num:ratio': 'ratio', 'num:gcc': 'gcc' };
+  var TYPE_FILTER = { 'ind:series': 'series', 'ind:matrix': 'matrix', 'ind:odd': 'odd', 'ded:order': 'order', 'ded:syll': 'syll', 'verb:tfc': 'tfc', 'verb:multi': 'multi', 'verb:ana': 'ana', 'num:multi': 'multi', 'num:pct': 'pct', 'num:share': 'share', 'num:conv': 'conv', 'num:pick': 'pick', 'num:proj': 'proj', 'num:growth': 'growth', 'num:unit': 'unit', 'num:fx': 'fx', 'ind:grid': 'grid', 'ind:rot': 'rot', 'ind:arrows': 'arrows', 'ind:overlay': 'overlay', 'ind:count': 'count', 'ind:code': 'code', 'ind:raven': 'raven', 'ind:ravenov': 'ravenov', 'ind:ravenpc': 'ravenpc', 'num:chart': 'charts', 'num:big': 'big', 'num:bars': 'shlint', 'num:cells': 'shlint', 'num:fin': 'fin', 'num:calc': 'calc', 'ded:rooms': 'rooms', 'ded:slot': 'slot', 'ded:cal': 'cal', 'ded:tasks': 'tasks', 'ded:ifthen': 'ifthen', 'ded:ordmc': 'ordmc', 'ded:rank': 'rank', 'ded:where': 'where', 'verb:vpick': 'pick', 'verb:wg': 'wg', 'verb:va': 'va', 'ind:tiles': 'tiles', 'ind:fill': 'fill', 'ind:switch': 'switch', 'ind:groups': 'groups', 'num:biz': 'biz', 'num:bubbles': 'bubbles', 'num:puzzle': 'puzzle', 'num:suff': 'suff', 'num:ratio': 'ratio', 'num:gcc': 'gcc' };
 
   var PRESETS = [
     { prov: 'SHL', id: 'shl-ind', name: T('Verify Interactive — индуктивный', 'Verify Interactive — Inductive'), parts: [['ind', 15]], total: 18 * 60, adaptive: true, filters: { ind: ['series', 'series', 'grid', 'grid', 'code', 'code', 'count', 'overlay'] }, tags: [T('коды, сетки, ряды', 'codes, grids, series')] },
     { prov: 'SHL', id: 'shl-num', name: T('Verify Interactive — числовой', 'Verify Interactive — Numerical'), parts: [['num', 10]], total: 18 * 60, adaptive: true, numMode: 'shl', tags: [T('графики, таблицы, ввод числа', 'charts, tables, typed answers')] },
-    { prov: 'SHL', id: 'shl-ded', name: T('Verify Interactive — дедуктивный', 'Verify Interactive — Deductive'), parts: [['ded', 12]], total: 18 * 60, adaptive: true, interactive: true, filters: { ded: ['rooms', 'rooms', 'slot', 'cal', 'tasks', 'rank', 'order', 'ordmc', 'ifthen'] }, tags: [T('рассадка, расписания, календарь', 'rooms, schedules, calendar')] },
+    { prov: 'SHL', id: 'shl-ded', name: T('Verify Interactive — дедуктивный', 'Verify Interactive — Deductive'), parts: [['ded', 12]], total: 18 * 60, adaptive: true, interactive: true, filters: { ded: ['rooms', 'where', 'where', 'slot', 'cal', 'tasks', 'rank', 'order', 'ordmc', 'ifthen'] }, tags: [T('рассадка, расписания, календарь', 'rooms, schedules, calendar')] },
     { prov: 'SHL', id: 'shl-verb', name: T('Verify Verbal Reasoning — вербальный', 'Verify Verbal Reasoning'), retired: T('SHL сняла тест Verify Verbal Reasoning с использования в 2024 году. В качестве замены SHL называет Verify Verbal Ability (понимание текста), Verify Deductive Reasoning и Verify Interactive Deductive. Экзамен оставлен в тренажёре для отработки формата «Верно / Неверно / Нельзя сказать»; экзамен Verify Verbal Ability есть в этом же разделе. Перед тренировкой проверьте точное название теста в приглашении.', 'SHL retired Verify Verbal Reasoning during 2024. As replacements SHL names Verify Verbal Ability (reading comprehension), Verify Deductive Reasoning and Verify Interactive Deductive. The trainer keeps this exam so you can practise the True / False / Cannot say format; a Verify Verbal Ability exam is in this section too. Check the exact test name in your invitation before you practise.'), parts: [['verb', 30, 'shl']], total: 19 * 60, mix: 'shl', tags: [T('30 утверждений за 19 минут', '30 statements in 19 minutes'), T('короткие и длинные тексты, 1–3 утверждения к тексту', 'short and long passages, 1–3 statements each')] },
     { prov: 'SHL', id: 'shl-va', name: T('Verify Verbal Ability — понимание текста', 'Verify Verbal Ability'), parts: [['verb', 18, 'va']], total: 15 * 60, adaptive: true, tags: [T('главная мысль, вывод, тон, позиция автора', 'main idea, inference, tone, author’s view'), T('один вопрос к тексту, 4 варианта', 'one question per passage, 4 options')] },
-    { prov: 'SHL', id: 'shl-g', name: T('Verify Interactive G+ — общие способности', 'Verify Interactive G+ — General ability'), parts: [['num', 8], ['ind', 8], ['ded', 8]], total: 36 * 60, adaptive: true, shuffle: true, numMode: 'shl', interactive: true, filters: { ind: ['series', 'grid', 'code', 'count', 'overlay'], ded: ['rooms', 'slot', 'cal', 'tasks', 'rank', 'order', 'ordmc'] }, tags: [T('3 типа вперемешку', '3 types mixed')] },
-    { prov: 'KF', id: 'kf-log', name: T('Elements Logical — абстрактный', 'Elements Logical'), parts: [['ind', 12]], perQ: 75, adaptive: true, filter: ['rot', 'rot', 'arrows', 'arrows', 'matrix', 'overlay'], tags: [T('матрицы 3×3: повороты, стрелки', '3×3 grids: rotations, arrows')] },
+    { prov: 'SHL', id: 'shl-g', name: T('Verify Interactive G+ — общие способности', 'Verify Interactive G+ — General ability'), parts: [['num', 8], ['ind', 8], ['ded', 8]], total: 36 * 60, adaptive: true, shuffle: true, numMode: 'shl', interactive: true, filters: { ind: ['series', 'grid', 'code', 'count', 'overlay'], ded: ['rooms', 'where', 'slot', 'cal', 'tasks', 'rank', 'order', 'ordmc'] }, tags: [T('3 типа вперемешку', '3 types mixed')] },
+    { prov: 'KF', id: 'kf-log', name: T('Elements Logical — абстрактный', 'Elements Logical'), parts: [['ind', 12]], perQ: 75, adaptive: true, wide: true, filter: ['rot', 'rot', 'arrows', 'arrows', 'matrix', 'overlay'], tags: [T('матрицы 3×3: повороты, стрелки', '3×3 grids: rotations, arrows'), T('на сложных вопросах 10–14 вариантов', '10–14 options on hard items')] },
     { prov: 'KF', id: 'kf-num', name: T('Elements Numerical — числовой', 'Elements Numerical'), parts: [['num', 12, null, { sets: 4, per: 3, t: [90, 75, 75] }]], perQ: [75, 90], adaptive: true, numMode: 'long', tags: [T('4 таблицы × 3 вопроса', '4 tables × 3 questions'), T('ответ из длинного списка (20 значений; в реальном тесте до 30)', 'answer from a long list (20 values; up to 30 in the real test)')] },
     { prov: 'KF', id: 'kf-verb', name: T('Elements Verbal — вербальный', 'Elements Verbal'), parts: [['verb', 15, 'select', { sets: 5, per: 3, t: [75, 60, 60] }]], perQ: [60, 75], adaptive: true, tags: [T('5 текстов × 3 вопроса', '5 passages × 3 questions'), T('выбор 1–2 из 4 утверждений', 'choose 1–2 of 4 statements')] },
     { prov: 'KF', id: 'kf-alp', name: T('KFALP — матрицы Равена (Capacity)', 'KFALP — Raven’s matrices (Capacity)'), parts: [['ind', 23]], total: 40 * 60, adaptive: 'up', approx: true, filters: { ind: ['raven', 'raven', 'raven', 'ravenov', 'ravenpc'] }, tags: [T('≈23 задания за 40 минут', '≈23 items in 40 min'), T('сложность только растёт', 'difficulty only rises'), T('8 или 6 вариантов', '8 or 6 options')] },
@@ -6339,6 +6718,27 @@ var ENGINE = (function () {
     { prov: 'GAME', id: 'game-cog', name: T('Cognify — игровые задания', 'Cognify — game-based tasks'), parts: [['ind', 8], ['num', 8]], perQ: 30, typeT: { bubbles: 20 }, shuffle: true, approx: true, filters: { ind: ['tiles', 'fill'], num: ['bubbles', 'bubbles', 'puzzle'] }, tags: [T('повороты узоров, силуэты, уравнения на скорость', 'pattern turns, silhouettes, equation bubbles')] },
     { prov: 'GAME', id: 'game-aon', name: T('Aon smartPredict — switchChallenge', 'Aon smartPredict — switchChallenge'), parts: [['ind', 60]], total: 6 * 60, adaptive: true, adStart: 1, open: true, approx: true, filter: ['switch'], tags: [T('6 минут: решите как можно больше', '6 minutes: solve as many as you can'), T('верно — сложнее, ошибка — проще', 'right → harder, wrong → easier')] },
   ];
+  // how close each exam is to the real test: ok — item count, time and timer match the cited source; simp — what is simplified or only estimated
+  var ECO_SIMP = T('Число заданий и лимиты — по неофициальным источникам (test-help.com и др.); ЭКОПСИ их не публикует.', 'Item counts and limits come from unofficial sources (test-help.com and others); Ecopsy does not publish them.');
+  var SHL_INT = T('Перетаскивание элементов заменено выбором из вариантов, таблицей выбора или вводом числа.', 'Drag-and-drop is replaced by picking an option, a selection grid or a typed number.');
+  var FID = {
+    'shl-ind': { ok: T('До 15 вопросов за 18 минут, адаптивный — фактлист SHL.', 'Up to 15 items in 18 minutes, adaptive — SHL fact sheet.'), simp: SHL_INT },
+    'shl-num': { ok: T('До 10 вопросов за 18 минут, адаптивный — фактлист SHL.', 'Up to 10 items in 18 minutes, adaptive — SHL fact sheet.'), simp: T('Часть интерактивных заданий — выбор из вариантов; виды заданий — по описаниям подготовительных сайтов.', 'Some interactive tasks are multiple choice; task types follow prep-site descriptions.') },
+    'shl-ded': { ok: T('До 12 вопросов за 18 минут, адаптивный — фактлист SHL.', 'Up to 12 items in 18 minutes, adaptive — SHL fact sheet.'), simp: T('Перетаскивание людей и встреч заменено таблицей выбора; виды заданий — по описаниям JobTestPrep.', 'Dragging people and meetings is replaced by a selection grid; task types follow JobTestPrep descriptions.') },
+    'shl-verb': { ok: T('До 30 утверждений за 19 минут — фактлист SHL.', 'Up to 30 statements in 19 minutes — SHL fact sheet.'), simp: T('Длину текстов и число утверждений к тексту SHL не публикует.', 'SHL does not publish passage length or statements per passage.') },
+    'shl-va': { ok: T('До 18 вопросов за 15 минут, адаптивный — фактлист SHL.', 'Up to 18 items in 15 minutes, adaptive — SHL fact sheet.'), simp: T('Формат «текст — один вопрос — 4 варианта» взят у сайтов подготовки: SHL его не публикует.', 'The “passage — one question — 4 options” format comes from prep sites; SHL does not publish it.') },
+    'shl-g': { ok: T('До 24 вопросов за 36 минут, по 8 каждого вида — фактлист SHL.', 'Up to 24 items in 36 minutes, 8 of each kind — SHL fact sheet.'), simp: SHL_INT },
+    'kf-log': { ok: T('12 вопросов по 75 секунд, адаптивный — по данным подготовительных сервисов (JobTestPrep и др.); Korn Ferry фактлист не публикует.', '12 items, 75 seconds each, adaptive — per prep providers (JobTestPrep and others); Korn Ferry publishes no fact sheet.') },
+    'kf-num': { ok: T('12 вопросов по 4 таблицам, 90 и 75 секунд — по данным подготовительных сервисов.', '12 items on 4 tables, 90 and 75 seconds — per prep providers.') },
+    'kf-verb': { ok: T('15 вопросов по 5 текстам, 75 и 60 секунд, выбор 1–2 утверждений — по данным подготовительных сервисов.', '15 items on 5 passages, 75 and 60 seconds, choose 1–2 statements — per prep providers.') },
+    'kf-alp': { simp: T('≈23 задания за 40 минут — оценка подготовительных сервисов; Korn Ferry не публикует число заданий и правило адаптации.', '≈23 items in 40 minutes — a prep-provider estimate; Korn Ferry publishes neither the item count nor the adaptive rule.') },
+    'eco-num': { simp: ECO_SIMP }, 'eco-verb': { simp: ECO_SIMP }, 'eco-log': { simp: ECO_SIMP }, 'eco-m-num': { simp: ECO_SIMP }, 'eco-m-verb': { simp: ECO_SIMP }, 'eco-m-log': { simp: ECO_SIMP },
+    'eco-pif': { simp: T('Состав блоков и лимиты — по неофициальным источникам и рассказам кандидатов; ЭКОПСИ их не публикует.', 'Blocks and limits come from unofficial sources and candidate reports; Ecopsy does not publish them.') },
+    'wg3': { ok: T('40 вопросов за 30 минут, 5 разделов — TalentLens.', '40 items in 30 minutes, 5 sections — TalentLens.'), simpRu: T('Русская версия — перевод для подготовки: официальной русской версии нет.', 'The Russian version is a practice translation: there is no official Russian edition.') },
+    'game-cog': { simp: T('Набор игр и время — по данным Criteria и подготовительных сервисов; механика игр упрощена.', 'Games and timing per Criteria and prep providers; game mechanics are simplified.') },
+    'game-aon': { simp: T('6 минут, адаптивный — по данным подготовительных сервисов; механика игры упрощена.', '6 minutes, adaptive — per prep providers; game mechanics are simplified.') }
+  };
+  function fidOf(p) { var f = FID[p.id] || {}; return { ok: f.ok || null, simp: f.simp || (S.lang === 'ru' ? f.simpRu : null) || null }; }
   var PROVS = {
     SHL: { name: 'SHL', d: T('Общий таймер на весь тест: время можно распределять между вопросами. Тесты Verify Interactive адаптивные: следующий вопрос подбирается по предыдущим ответам, поэтому вернуться к пройденному обычно нельзя.', 'One timer for the whole test, so you can spread time across items. Verify Interactive tests are adaptive: each item is chosen from your previous answers, so you usually cannot go back.') },
     KF: { name: 'Korn Ferry · Talent Q Elements', d: T('Свой таймер на каждый вопрос, неиспользованное время сгорает, вернуться назад нельзя. Сложность адаптивная: после верного ответа задание сложнее, после ошибки или если время вышло без ответа — проще. В вербальном тесте часть вопросов требует выбрать два ответа. В тренажёре, как в реальном тесте, к каждой таблице и тексту идёт по три вопроса: в Numerical 90, 75 и 75 с, в Verbal 75, 60 и 60 с; в Logical — 75 с на каждый вопрос.', 'A separate timer for every item; unused time is lost and you cannot go back. Adaptive difficulty: harder after a correct answer, easier after a mistake or when time runs out with no answer selected. In Verbal, some items need two answers. As in the real test, each table or passage carries three questions: 90, 75 and 75 s in Numerical, 75, 60 and 60 s in Verbal; Logical gives 75 s per item.') },
@@ -6365,7 +6765,7 @@ var ENGINE = (function () {
       var ses = S.ses || {}; ses.sets = ses.sets || {};
       var r = E.numSetNext(level, ses.sets[spec.set] || null, 'long'); ses.sets[spec.set] = r.set; return r.q;
     }
-    if (spec.mod === 'ind') return E.genInductive(level, spec.filter);
+    if (spec.mod === 'ind') return E.genInductive(level, spec.filter, spec.wide && level === 3 ? { nOpt: 10 + Math.floor(Math.random() * 5) } : null); // Elements Logical: up to 14 options on hard items
     if (spec.mod === 'ded') return E.genDeductive(level, spec.filter, { interactive: spec.interactive });
     if (spec.mod === 'num') {
       var nm = spec.numMode === 'input50' ? (Math.random() < 0.5 ? 'input' : 'choice') : (spec.numMode || 'choice');
@@ -6422,7 +6822,7 @@ var ENGINE = (function () {
       var fl = (opts.filters && opts.filters[mod]) || opts.filter;
       // SHL Verbal Ability items (reading comprehension): the whole exam, the chip alone, a share of mixed practice, 15% of "all types"
       var vaShare = mod !== 'verb' ? 0 : p[2] === 'va' ? 1 : p[2] || kf ? 0 : flv.indexOf('va') >= 0 ? (flv.length === 1 ? 1 : 1 / flv.length) : !flv.length && !opts.exam ? 0.15 : 0;
-      for (var i = 0; i < n; i++) plan.push({ va: vaShare > 0 && Math.floor((i + 1) * vaShare) > Math.floor(i * vaShare), mod: mod, filter: fl, exam: !!opts.exam, numMode: opts.numMode, interactive: opts.interactive, item: items ? items[i] : null, ramp: opts.ramp ? (i < 3 ? 1 : i < 9 ? 2 : 3) : null,
+      for (var i = 0; i < n; i++) plan.push({ va: vaShare > 0 && Math.floor((i + 1) * vaShare) > Math.floor(i * vaShare), mod: mod, filter: fl, exam: !!opts.exam, numMode: opts.numMode, interactive: opts.interactive, item: items ? items[i] : null, wide: !!opts.wide, ramp: opts.ramp ? (i < 3 ? 1 : i < 9 ? 2 : 3) : null,
         set: kf && mod === 'num' ? Math.floor(i / kf.per) : null, t: kf ? kf.t[i % kf.per] : null });
     });
     if (opts.shuffle) plan = E.shuffle(plan);
@@ -6435,11 +6835,12 @@ var ENGINE = (function () {
   }
   function startExam(id) {
     var p = PRESETS.filter(function (x) { return x.id === id; })[0];
-    var plan = buildPlan(p.parts, { filter: p.filter, filters: p.filters, ramp: p.ramp, shuffle: p.shuffle, exam: true, numMode: p.numMode, interactive: p.interactive, pickShare: p.pickShare });
+    var plan = buildPlan(p.parts, { filter: p.filter, filters: p.filters, ramp: p.ramp, shuffle: p.shuffle, exam: true, numMode: p.numMode, interactive: p.interactive, pickShare: p.pickShare, wide: p.wide });
     beginSession({ kind: 'exam', title: p.name, subtitle: T(provName(p.prov, 'ru') + ' · экзамен', provName(p.prov, 'en') + ' · exam'), plan: plan, timer: p.perQ ? 'perQ' : 'global', total: p.total, perQ: p.perQ, typeT: p.typeT, adaptive: p.adaptive, open: !!p.open, level: 2, adLevel: p.adStart || (p.adaptive === 'up' || p.adaptive === 'eco' ? 1 : 2), mix: p.mix, src: { type: 'exam', id: id } });
   }
   function provName(k, lang) { return L(PROVS[k].name, lang); }
   function beginSession(o) {
+    clearSes();
     var ses = Object.assign({ qs: [], ans: [], i: 0, lang: S.lang, started: Date.now(), done: false, sel: null, revealed: false, adLevel: 2 }, o);
     if (ses.timer === 'global') ses.deadline = Date.now() + ses.total * 1000;
     S.ses = ses; S.view = 'session'; S.confirmQuit = false;
@@ -6458,6 +6859,7 @@ var ENGINE = (function () {
   function seeded(seed, f) { var r0 = Math.random; Math.random = mulberry(seed); try { return f(); } finally { Math.random = r0; } }
   function specRep(spec) {
     var r = { mod: spec.mod, filter: spec.filter || null, exam: !!spec.exam, numMode: spec.numMode || null, interactive: spec.interactive == null ? null : spec.interactive, item: spec.item || null };
+    if (spec.wide) r.wide = true;
     if (spec.va) { r.va = true; r.vaUsed = ((S.ses && S.ses.vaUsed) || []).slice(); }
     if (spec.set != null && spec.mod === 'num') { var ss = (S.ses && S.ses.sets) || {}; r.set = 0; r.setIn = ss[spec.set] ? JSON.parse(JSON.stringify(ss[spec.set])) : null; }
     return r;
@@ -6479,8 +6881,39 @@ var ENGINE = (function () {
     var s = S.ses, spec = s.plan[s.i];
     if (!s.qs[s.i]) s.qs[s.i] = safeGen(spec, levelFor(spec));
     var q = s.qs[s.i];
-    s.sel = q.multi ? [] : q.mode === 'assign' ? q.assign.rows.map(function () { return null; }) : q.mode === 'bars' ? q.bars.target.map(function () { return null; }) : q.mode === 'cells' ? q.cellAns.map(function () { return null; }) : null; s.revealed = false; s.qStart = Date.now();
+    resetSel(s, q);
     if (s.timer === 'perQ') s.qDeadline = Date.now() + (spec.t || (s.typeT && s.typeT[q.type]) || (Array.isArray(s.perQ) ? s.perQ[(spec.ramp || 2) - 1] : s.perQ)) * 1000;
+    saveSes();
+  }
+  function resetSel(s, q) {
+    s.sel = q.multi ? [] : q.mode === 'assign' ? q.assign.rows.map(function () { return null; }) : q.mode === 'bars' ? q.bars.target.map(function () { return null; }) : q.mode === 'cells' ? q.cellAns.map(function () { return null; }) : null; s.revealed = false; s.qStart = Date.now();
+  }
+  // an exam in progress survives a page reload: items are rebuilt from their seeds and the original deadline is kept,
+  // so the clock keeps running while the page is closed, as in a real online test
+  var SES_KEY = STORE + '-exam', SES_KEEP = ['kind', 'title', 'subtitle', 'timer', 'total', 'perQ', 'typeT', 'adaptive', 'open', 'level', 'adLevel', 'miss', 'mix', 'src', 'lang', 'started', 'deadline', 'qDeadline', 'i', 'ans', 'plan', 'errIds', 'vaUsed', 'sets'];
+  function saveSes() {
+    var s = S.ses; if (!s || s.kind !== 'exam' || s.done) return;
+    try { var o = { v: 1 }; SES_KEEP.forEach(function (k) { if (s[k] !== undefined) o[k] = s[k]; }); o.reps = s.qs.map(function (q) { return q ? q._rep : null; }); localStorage.setItem(SES_KEY, JSON.stringify(o)); } catch (e) { }
+  }
+  function clearSes() { try { localStorage.removeItem(SES_KEY); } catch (e) { } }
+  function restoreSes() {
+    var o = null; try { o = JSON.parse(localStorage.getItem(SES_KEY) || 'null'); } catch (e) { o = null; }
+    if (!o) return false;
+    // an exam abandoned more than 12 hours ago is dropped rather than resumed
+    if (o.v !== 1 || o.kind !== 'exam' || !Array.isArray(o.plan) || !Array.isArray(o.reps) || !isFinite(o.started) || Date.now() - o.started > 12 * 3600 * 1000 || !(o.i >= 0 && o.i < o.plan.length)) { clearSes(); return false; }
+    try {
+      var s = Object.assign({ qs: [], ans: [], done: false, sel: null, revealed: false }, o); delete s.reps; delete s.v;
+      s.ans = Array.isArray(o.ans) ? o.ans : [];
+      if (o.lang === 'ru' || o.lang === 'en') S.lang = o.lang;
+      S.ses = s;
+      s.qs = o.reps.map(function (r) { return r ? replayQ(r) : null; });
+      s.vaUsed = o.vaUsed; s.sets = o.sets; // replays do not touch these, but keep the saved state exactly
+      var q = s.qs[s.i];
+      if (!q || s.ans[s.i]) { S.ses = null; clearSes(); return false; }
+      resetSel(s, q);
+      S.view = 'session'; S.confirmQuit = false;
+      return true;
+    } catch (e) { S.ses = null; clearSes(); return false; }
   }
   function parseNum(str) {
     if (str == null) return NaN;
@@ -6573,7 +7006,7 @@ var ENGINE = (function () {
   function answeredCount(s) { var k = 0; s.plan.forEach(function (x, i) { if (s.ans[i]) k++; }); return k; }
   function finish(timeUp) {
     var s = S.ses; if (s.done) return;
-    s.done = true; s.timeUp = timeUp; s.ended = (timeUp && s.deadline) ? Math.min(Date.now(), s.deadline) : Date.now(); stopTick();
+    s.done = true; s.timeUp = timeUp; s.ended = (timeUp && s.deadline) ? Math.min(Date.now(), s.deadline) : Date.now(); stopTick(); clearSes();
     saveHistory(s);
     S.view = 'results'; render(); window.scrollTo(0, 0);
     if (timeUp) toast(tr(U.timeUp));
@@ -6715,6 +7148,9 @@ var ENGINE = (function () {
     t.push('<span class="tag">' + n + ' ' + (S.lang === 'ru' ? 'вопр.' : 'items') + '</span>');
     if (p.perQ) t.push('<span class="tag hot">' + (p.approx ? '≈' : '') + (Array.isArray(p.perQ) ? p.perQ[0] + '–' + p.perQ[p.perQ.length - 1] : p.perQ) + (S.lang === 'ru' ? ' с на вопрос' : ' s per item') + '</span>');
     else t.push('<span class="tag">' + (p.approx ? '≈' : '') + (p.total / 60) + (S.lang === 'ru' ? ' мин' : ' min') + '</span>');
+    var fd = fidOf(p);
+    if (fd.ok) t.push('<span class="tag fid-ok">' + (S.lang === 'ru' ? 'подтверждено' : 'confirmed') + '</span>');
+    if (fd.simp) t.push('<span class="tag fid-simp">' + (S.lang === 'ru' ? 'упрощено' : 'simplified') + '</span>');
     if (p.retired) t.push('<span class="tag hot">' + (S.lang === 'ru' ? 'снят SHL в 2024' : 'retired by SHL in 2024') + '</span>');
     if (p.adaptive) t.push('<span class="tag">' + (S.lang === 'ru' ? 'адаптивный' : 'adaptive') + '</span>');
     if (p.ramp) t.push('<span class="tag">' + (S.lang === 'ru' ? 'лёгкие → сложные' : 'easy → hard') + '</span>');
@@ -6726,7 +7162,8 @@ var ENGINE = (function () {
     ['SHL', 'KF', 'ECO', 'TL', 'GAME'].forEach(function (k) {
       h += '<div class="prov-group"><h2>' + esc(provName(k, S.lang)) + '</h2><p>' + esc(tr(PROVS[k].d)) + '</p><div class="rows">';
       PRESETS.filter(function (p) { return p.prov === k; }).forEach(function (p) {
-        h += '<div class="row"><div class="row-main"><b>' + esc(tr(p.name)) + '</b><div class="meta">' + presetMeta(p) + '</div></div><button class="btn btn-dark btn-sm" data-act="exam" data-v="' + p.id + '">' + esc(tr(U.start)) + '</button></div>';
+        var fd = fidOf(p), fn = [fd.ok ? '<span class="fo">' + esc(tr(T('Подтверждено: ', 'Confirmed: '))) + '</span>' + esc(tr(fd.ok)) : '', fd.simp ? '<span class="fs">' + esc(tr(T('Упрощено: ', 'Simplified: '))) + '</span>' + esc(tr(fd.simp)) : ''].filter(Boolean).join(' ');
+        h += '<div class="row"><div class="row-main"><b>' + esc(tr(p.name)) + '</b><div class="meta">' + presetMeta(p) + '</div>' + (fn ? '<p class="fid">' + fn + '</p>' : '') + '</div><button class="btn btn-dark btn-sm" data-act="exam" data-v="' + p.id + '">' + esc(tr(U.start)) + '</button></div>';
       });
       h += '</div></div>';
     });
@@ -6818,7 +7255,7 @@ var ENGINE = (function () {
   }
   function assignHtml(q, st) {
     var lang = st.lang, A = q.assign, sel = st.revealed ? ((st.ans && st.ans.chosen) || A.rows.map(function () { return null; })) : (st.sel || []);
-    var h = '<table class="asg"><thead><tr><th class="who"></th>' + A.cols.map(function (c) { return '<th>' + c(lang) + '</th>'; }).join('') + '</tr></thead><tbody>';
+    var h = '<table class="asg' + (A.cols.length >= 5 ? ' many' : '') + '" lang="' + lang + '"><thead><tr><th class="who"></th>' + A.cols.map(function (c) { var t = c(lang); if (A.cols.length >= 5) t = t.replace(/^Conference/, 'Confer\u00ADence'); return '<th>' + t + '</th>'; }).join('') + '</tr></thead><tbody>';
     A.rows.forEach(function (r, i) {
       h += '<tr><td class="who">' + r(lang) + '</td>';
       A.cols.forEach(function (c, j) {
@@ -7026,7 +7463,7 @@ var ENGINE = (function () {
           ['Сравните первую и последнюю фигуры: это быстро показывает направление поворота и общий счёт.', 'Compare the first and last figures: it quickly shows the direction of rotation and the overall count.'],
           ['В матрице начните с самой полной строки или столбца и выведите правило из них.', 'In a matrix start from the most complete row or column and derive the rule from it.'],
           ['В «лишней фигуре» ищите связь элементов внутри каждой фигуры. Самая заметная по цвету фигура часто ловушка.', 'For the odd one out, look for a link between elements inside each figure. The one that stands out by colour is often the trap.'],
-          ['В рядах и поворотах на уровнях Senior и эксперт у каждого правила есть «свой» неверный вариант, нарушающий только его, поэтому без всех правил остаются минимум два варианта. Обратная сторона: верный ответ здесь часто больше всех похож на остальные — по каждому признаку его значение встречается чаще. Используйте это только как последний приём, когда время кончается: в матрицах с 6–8 вариантами и в Равене он не работает.', 'In series and rotation items at Senior and Expert level every rule has its own wrong option that breaks only that rule, so without all the rules at least two options remain. The flip side: the right answer is often the one most like the others — on each feature its value is the most common. Use this only as a last resort when time runs out: it does not work in 6–8-option matrices or in Raven items.'],
+          ['«Самый похожий на остальные вариант» здесь не подсказка: варианты подобраны так, что этот приём (и подбор ответа по самому частому значению каждого признака) угадывает не чаще случайного выбора. Ищите правила. В заданиях с 5 вариантами одно из трёх правил проверяется только в паре с другим — двух найденных правил хватает, чтобы остался один вариант; в заданиях Korn Ferry и Равена с 8 и более вариантами нужны все правила.', 'Picking “the option most like the others” is not a shortcut here: the options are chosen so that this trick (and building the answer from the most common value of each feature) does no better than a random guess. Find the rules. In 5-option items one of three rules is tested only together with another, so two rules are enough to leave one option; in Korn Ferry and Raven items with 8 or more options you need every rule.'],
           ['Не тратьте больше 90 секунд на вопрос: выберите лучший вариант и двигайтесь дальше.', 'Do not spend more than 90 seconds on one item: pick the best option and move on.']
         ]]
       ]
@@ -7124,11 +7561,18 @@ var ENGINE = (function () {
           ['Календарь: «не менее двух полных рабочих дней между X и началом» — считаются только рабочие дни строго между ними; сам день X, день начала и выходные не считаются. «Закончиться не позже 23-го» относится к последнему дню события, а не к первому.', 'Calendars: “at least two full working days between X and the start” counts only working days strictly in between; day X, the start day and weekends do not count. “End no later than the 23rd” applies to the event’s last day, not its first.'],
           ['Планирование задач: раннее начало задачи = самое позднее окончание её предшественников. Срок проекта — самое позднее окончание, а не сумма длительностей. Резерв — на сколько задачу можно сдвинуть, не задев срок; у задач критического пути резерв 0.', 'Task scheduling: a task’s earliest start = the latest finish of its predecessors. The project length is the latest finish, not the sum of durations. Float is how far a task can slip without moving the end date; critical-path tasks have zero float.'],
         ]],
+        ['«Где сотрудник в 14:30» (SHL Interactive)', '“Who is where at 14:30” (SHL Interactive)', [
+          ['Формат: правила офиса (без занятия — на рабочем месте, звонки — в конференц-зале, обед — в столовой и т. п.) и расписание каждого сотрудника. Нужно расставить всех по комнатам на заданное время.', 'Format: office rules (nothing scheduled — at the desk, calls — in the conference room, lunch — in the dining area and so on) and each person’s schedule. Place everyone in a room at the given time.'],
+          ['Идите по людям, а не по комнатам: для каждого найдите занятие, которое идёт ровно в это время, и только потом примените правило места.', 'Go person by person, not room by room: find the activity running at exactly that time, then apply the location rule.'],
+          ['Граница времени: занятие до 14:30 в 14:30 уже закончено, а занятие с 14:30 уже идёт. Это главная ловушка.', 'Boundaries: an activity until 14:30 is over at 14:30, and one from 14:30 is already running. This is the main trap.'],
+          ['«Сразу после обеда, 30 минут» и «перенесли на час позже» сначала переведите в часы. Исключения из правил («звонки дольше 45 минут — в переговорной») проверяйте в последнюю очередь.', 'Convert “straight after lunch, 30 min” and “moved an hour later” into clock times first. Check exceptions (“calls over 45 minutes go to the meeting room”) last.']
+        ]],
         ['Когда допустимых расстановок несколько', 'When several arrangements are possible', [
           ['Прочитайте вопрос: «обязательно верно» — в любой допустимой расстановке, «может быть верно» — хотя бы в одной, «точно неверно» — ни в одной.', 'Read the stem: “must be true” holds in every valid arrangement, “could be true” in at least one, “cannot be true” in none.'],
           ['Выпишите две-три допустимые расстановки. Обычно этого хватает, чтобы сразу отсечь большую часть вариантов.', 'Write out two or three valid arrangements. That is usually enough to rule out most options at once.'],
           ['«Может быть верно»: варианты, которые нарушают условия, отсекаются быстро. Для оставшегося достаточно найти одну подходящую расстановку.', '“Could be true”: options that break a condition drop out quickly. For the one left, a single valid arrangement is enough.'],
           ['«Точно неверно»: добавьте утверждение к условиям и попробуйте расставить всех. Не получилось — это ответ.', '“Cannot be true”: add the statement to the conditions and try to place everyone. If you cannot, that is the answer.'],
+          ['«НЕ следует обязательно»: верны все варианты, кроме одного, — найдите тот, который в какой-то допустимой расстановке ложен. Утверждения, которые просто повторяют условие, здесь в варианты не попадают.', '“Does NOT necessarily follow”: every option but one is certain — find the one that is false in at least one valid arrangement. Options that merely restate a condition are not used here.'],
           ['«Обязательно верно»: ищите допустимую расстановку, в которой утверждение ложно. Нашли — вариант отпадает.', '“Must be true”: look for a valid arrangement in which the statement is false. If you find one, the option is out.']
         ], true],
         ['Логические выводы', 'Logical conclusions', [
@@ -7207,6 +7651,7 @@ var ENGINE = (function () {
         ], true],
         ['Критическое мышление (Watson-Glaser)', 'Critical thinking (Watson-Glaser)', [
           ['<b>Выводы.</b> Пять ответов: верно, скорее верно, недостаточно данных, скорее неверно, неверно. «Верно» и «Неверно» — только когда факты не оставляют сомнений. «Скорее…» — когда текст делает вывод вероятнее или менее вероятным. «Недостаточно данных» — когда текст вопроса вообще не касается.', '<b>Inference.</b> Five answers: true, probably true, insufficient data, probably false, false. Use true and false only when the facts leave no doubt; “probably” when the passage makes the inference more or less likely; insufficient data when the passage does not touch the point.'],
+          ['<b>Соседние ответы в «Выводах».</b> Чаще всего ошибаются на шаг: «Верно» вместо «Скорее верно» и наоборот. Спросите себя: можно ли представить, что факты верны, а вывод — нет? Если можно, но это маловероятно, — «Скорее верно». Если нельзя — «Верно». «Недостаточно данных» — только когда факты вообще не склоняют ни в одну сторону. После ответа в разборе указано, почему не подходит соседний вариант.', '<b>Neighbouring answers in Inference.</b> Most mistakes are one step off: “True” instead of “Probably true” or the other way round. Ask: can I imagine the facts being true and the inference false? If yes but it is unlikely — “Probably true”. If no — “True”. “Insufficient data” only when the facts lean neither way. After you answer, the breakdown explains why the neighbouring option is wrong.'],
           ['<b>Допущения.</b> Проверка: если допущение неверно, рассуждение разваливается? Тогда оно сделано. Утверждения «сильнее», чем нужно автору («так же эффективно», «все»), обычно не сделаны.', '<b>Assumptions.</b> Test: if the assumption were false, would the argument collapse? Then it is made. Stronger claims than the author needs (“just as effective”, “all”) are usually not made.'],
           ['<b>Дедукция.</b> Принимайте посылки как есть, даже абсурдные, и не добавляйте знаний о мире. «Некоторые» не значит «не все»; «ни один из A не B» не значит, что все не-A — это B.', '<b>Deduction.</b> Accept the premises as given, even if absurd, and add no outside knowledge. “Some” does not mean “not all”; “no A is B” does not make every non-A a B.'],
           ['<b>Интерпретация.</b> Мягче дедукции: вывод должен следовать вне разумных сомнений. Средние значения не говорят о каждом случае; «устранит», «всегда», «каждый» — признаки чрезмерного обобщения.', '<b>Interpretation.</b> Less strict than deduction: the conclusion must follow beyond reasonable doubt. Averages say nothing about every case; “eliminate”, “always”, “every” signal over-generalisation.'],
@@ -7225,7 +7670,7 @@ var ENGINE = (function () {
       blocks: [
         ['Уровни сложности: что меняется', 'Difficulty levels: what changes', [
           ['<b>Общий принцип.</b> Базовый уровень — знакомство с форматом. Senior — уровень реального теста для руководителя. Эксперт — с запасом: если уверенно решаете его, реальный тест покажется спокойнее.', '<b>The idea.</b> Basic is for learning the format. Senior matches a real test for a manager. Expert adds a margin: if you handle it, the real test will feel calmer.'],
-          ['<b>Абстрактный.</b> На базовом уровне 2 правила, и иногда ответ виден уже по части из них. На Senior и эксперте правил 3–4, у каждого правила есть «свой» неверный вариант, поэтому нужны все правила; добавляются отвлекающие элементы, цепочки, правила по столбцам и «по одному разу в строке и столбце».', '<b>Abstract.</b> Basic has 2 rules, and sometimes part of them is enough. At Senior and Expert there are 3–4 rules, each with its own wrong option, so you need them all; distractor elements, chains, column rules and “once per row and column” are added.'],
+          ['<b>Абстрактный.</b> На базовом уровне 2 правила, и иногда ответ виден уже по части из них. На Senior и эксперте правил 3–4. В заданиях с 5 вариантами (ряды, сетка, коды) одно правило проверяется в паре с другим, иначе верный ответ всегда был бы «самым похожим на остальные»; в поворотах, стрелках и матрицах Korn Ferry на этих уровнях 8 вариантов (на экзамене эксперта 10–14) и нужны все правила. Добавляются отвлекающие элементы, цепочки, правила по столбцам и «по одному разу в строке и столбце».', '<b>Abstract.</b> Basic has 2 rules, and sometimes part of them is enough. Senior and Expert have 3–4 rules. In 5-option items (series, grid, codes) one rule is tested together with another, otherwise the right answer would always be “the one most like the others”; Korn Ferry rotation, arrow and matrix items have 8 options at these levels (10–14 in the Expert exam) and need every rule. Distractor elements, chains, column rules and “once per row and column” are added.'],
           ['<b>Лишняя фигура и группы.</b> В «лишней фигуре» на эксперте 9 вариантов вместо 5. В «группах A и B» базовый уровень — цвет (каких фигур больше), ответ на нём всегда «A» или «B», Senior — цвет или наличие определённой фигуры, эксперт — наличие фигуры или плавные/угловатые контуры при 6–9 элементах в клетке.', '<b>Odd one out and groups.</b> Odd one out has 9 options at Expert instead of 5. In “Groups A and B”, Basic uses colour (which kind is in the majority) and the answer there is always A or B, Senior colour or a particular symbol, Expert a particular symbol or rounded versus angular shapes with 6–9 elements per cell.'],
           ['<b>Числовой.</b> Базовый — расчёт в один шаг, варианты заметно различаются. Senior — около трети задач в два шага, в каждой не меньше двух вариантов-ловушек, варианты ближе друг к другу. Эксперт — около 70% задач составные, варианты часто в 1–5% друг от друга: прикидки не хватает.', '<b>Numerical.</b> Basic: one-step sums, options clearly apart. Senior: about a third of items take two steps, every item has at least two trap options, options sit closer. Expert: about 70% of items are multi-step and options are often 1–5% apart, so estimating is not enough.'],
           ['<b>Дедуктивный.</b> Базовый — до двух прямых подсказок о позициях, в выводах только «все» и «ни один». Эксперт — прямых подсказок нет, условий больше, в выводах встречаются «некоторые» и «некоторые… не».', '<b>Deductive.</b> Basic: up to two direct position clues, and only “all” and “no” in syllogisms. Expert: no direct clues, more conditions, and “some” and “some … not” appear.'],
@@ -7400,14 +7845,14 @@ var ENGINE = (function () {
       'Тест адаптивный и начинается со средней сложности: после верного ответа следующий вопрос сложнее, после неверного или если время вышло без ответа — проще.',
       'Если время на вопрос истекло, засчитывается ответ, выбранный к этому моменту.',
       'В вербальном тесте в части вопросов нужно выбрать два утверждения, в остальных — одно; в вопросе всегда сказано, сколько выбрать. В числовом тесте ответ выбирается из длинного выпадающего списка значений.',
-      'Logical построен на принципе матриц Равена: найти правило и применить его к пропущенной ячейке.'
+      'Logical построен на принципе матриц Равена: найти правило и применить его к пропущенной ячейке. По данным JobTestPrep, в сложных вопросах бывает до 14 вариантов ответа; в экзамене тренажёра на уровне эксперта их 10–14. Совет: сначала выведите ответ по правилам, потом ищите его в списке — перебирать 14 картинок дольше, чем 75 секунд.'
     ] : [
       'Three tests: Numerical — 12 questions on 4 tables, Verbal — 15 questions on 5 passages, Logical — 12 questions. There is no overall limit; using every item’s full time, a test takes 15–16 minutes.',
       'A timer on every item: Numerical — 90 s for the first question on a table, 75 s for the next ones; Verbal — 75 s for the first question on a passage, 60 s for the next; Logical — 75 s. Unused time does not carry over and you cannot go back.',
       'The test is adaptive and starts at medium difficulty: a correct answer makes the next item harder; a wrong answer, or no answer when time runs out, makes it easier.',
       'If time runs out on an item, the answer selected at that moment is submitted.',
       'In Verbal, some questions ask for two statements and others for one; the question always says how many. In Numerical, the answer is picked from a long drop-down list of values.',
-      'Logical is built on the Raven’s matrices principle: find the rule and apply it to the missing cell.'
+      'Logical is built on the Raven’s matrices principle: find the rule and apply it to the missing cell. According to JobTestPrep, hard items can have up to 14 options; the trainer’s exam uses 10–14 at Expert level. Tip: work out the answer from the rules first, then look for it in the list — checking 14 pictures one by one takes longer than 75 seconds.'
     ], SRC + [
       a('https://jobtestprep.co.uk/talent-q-elements-numerical-test', 'JobTestPrep — Elements Numerical'),
       a('https://www.intervyo.co.uk/assessments/talent-q', 'Intervyo — Talent Q'),
@@ -7622,7 +8067,9 @@ var ENGINE = (function () {
 
   // test hook (used by the regression scripts)
   window.__trainer = { PRESETS: PRESETS, safeGen: function (spec, level) { return safeGen(spec, level); }, replayQ: replayQ, buildPlan: buildPlan, MODS: MODS, TYPE_LABEL: TYPE_LABEL, TYPE_FILTER: TYPE_FILTER, typeKey: typeKey, S: S, DB: function () { return DB; } };
+  var resumed = restoreSes();
   render();
+  if (resumed) { startTick(); toast(tr(T('Экзамен восстановлен. Таймер не останавливался, пока страница была закрыта.', 'Exam restored. The timer kept running while the page was closed.'))); }
 })();
 </script>
 
